@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://metaconnect.up.railway.app/:path*"
+      "destination": "https://metaconnect.railway.app/:path*"
     }
   ]
 }
