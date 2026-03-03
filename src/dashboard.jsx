@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const PROXY = "/api";
+const PROXY = "/api/v2";
 const DB_ID = 2;
 const REFRESH_INTERVAL = 30000;
 
@@ -17,7 +17,7 @@ async function runQuery(sql) {
   const res = await fetch(`${PROXY}/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ database: DB_ID, native: { query: sql } }),
+    body: JSON.stringify({ database: DB_ID, sql }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -279,7 +279,7 @@ export default function Dashboard() {
 
         <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between" }}>
           <span style={{ fontSize: 10, color: "#374151", fontFamily: "monospace" }}>Production DB · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
-          <span style={{ fontSize: 10, color: "#374151", fontFamily: "monospace" }}>Auto-refresh 30s · metaconnect.railway.app</span>
+          <span style={{ fontSize: 10, color: "#374151", fontFamily: "monospace" }}>Auto-refresh 30s · metaconnect.up.railway.app</span>
         </div>
       </div>
     </div>
