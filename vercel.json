@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://metaconnect.railway.app/:path*"
+    }
+  ]
+}
