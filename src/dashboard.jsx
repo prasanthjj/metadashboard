@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const PROXY = "https://metaconnect.railway.app";
+const PROXY = "https://metaconnect.up.railway.app";
 const DB_ID = 2;
 const REFRESH_INTERVAL = 30000;
 
