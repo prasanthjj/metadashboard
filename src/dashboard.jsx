@@ -279,7 +279,7 @@ export default function Dashboard() {
 
         <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
           <span style={{ fontSize:10, color:"#374151", fontFamily:"monospace" }}>Production DB · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
-          <span style={{ fontSize:10, color:"#374151", fontFamily:"monospace" }}>Auto-refresh 30s · metaconnect.railway.app</span>
+          <span style={{ fontSize:10, color:"#374151", fontFamily:"monospace" }}>Auto-refresh 30s · metaconnect.up.railway.app</span>
         </div>
       </div>
     </div>
