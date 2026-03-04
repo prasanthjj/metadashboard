@@ -4,6 +4,10 @@ const PROXY = "/api/v2";
 const DB_ID  = 2;
 const REFRESH_INTERVAL = 3600; // seconds
 
+// ── Service codes ─────────────────────────────────────────────────────────────
+const SC = { XL:"XL Lite", AN:"Commercial", AP:"Premium", IP:"ITPS", AE:"XPress", IE:"EMS" };
+const serviceName = s => SC[s] ? `${s} – ${SC[s]}` : (s || "Unknown");
+
 // ── Country codes ─────────────────────────────────────────────────────────────
 const CC = { US:"United States",GB:"United Kingdom",AU:"Australia",CA:"Canada",DE:"Germany",FR:"France",IT:"Italy",CH:"Switzerland",JP:"Japan",ES:"Spain",NL:"Netherlands",NZ:"New Zealand",MX:"Mexico",AT:"Austria",SE:"Sweden",SG:"Singapore",AE:"UAE",HK:"Hong Kong",BE:"Belgium",DK:"Denmark",FI:"Finland",NO:"Norway",PT:"Portugal",IE:"Ireland",PL:"Poland",ZA:"South Africa",BR:"Brazil",IN:"India",CN:"China",KR:"South Korea",TH:"Thailand",MY:"Malaysia",PH:"Philippines" };
 const countryName = c => CC[c] || c || "Unknown";
@@ -55,12 +59,13 @@ function makeQueries(start, end) {
   const df  = `created_on>='${start}' AND created_on<DATE_ADD('${end}',INTERVAL 1 DAY)`;
   const odf = `o.created_on>='${start}' AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY)`;
   return {
-    kpis:          `SELECT COUNT(CASE WHEN iscancelled=0 THEN id END) as total_orders, SUM(${REV}) as total_revenue, ROUND(SUM(${REV})/NULLIF(COUNT(CASE WHEN iscancelled=0 THEN id END),0),2) as avg_order_value, COUNT(DISTINCT CASE WHEN iscancelled=0 THEN customerid END) as unique_customers FROM orders WHERE ${df} AND ${ACTF}`,
-    ordersByStatus:`SELECT status,COUNT(*) as count FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} GROUP BY status ORDER BY count DESC LIMIT 10`,
-    dailyRevenue:  `SELECT DATE(created_on) as day,COUNT(CASE WHEN iscancelled=0 THEN id END) as orders,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} GROUP BY DATE(created_on) ORDER BY day ASC`,
-    topCountries:  `SELECT destination_country,COUNT(*) as count FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
-    topCustomers:  `SELECT COALESCE(c.contact_name,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.contact_name,c.email ORDER BY revenue DESC LIMIT 10`,
-    trackingStatus:`SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
+    kpis:              `SELECT COUNT(CASE WHEN iscancelled=0 THEN id END) as total_orders, SUM(${REV}) as total_revenue, ROUND(SUM(${REV})/NULLIF(COUNT(CASE WHEN iscancelled=0 THEN id END),0),2) as avg_order_value, COUNT(DISTINCT CASE WHEN iscancelled=0 THEN customerid END) as unique_customers, COUNT(CASE WHEN iscancelled=1 THEN id END) as cancelled_orders FROM orders WHERE ${df} AND ${ACTF}`,
+    ordersByStatus:    `SELECT status,COUNT(*) as count FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} GROUP BY status ORDER BY count DESC LIMIT 10`,
+    dailyRevenue:      `SELECT DATE(created_on) as day,COUNT(CASE WHEN iscancelled=0 THEN id END) as orders,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} GROUP BY DATE(created_on) ORDER BY day ASC`,
+    topCountries:      `SELECT destination_country,SUM(${REV}) as revenue,COUNT(CASE WHEN iscancelled=0 THEN id END) as count FROM orders WHERE ${df} AND ${ACTF} GROUP BY destination_country ORDER BY revenue DESC LIMIT 12`,
+    topCustomers:      `SELECT COALESCE(c.contact_name,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.contact_name,c.email ORDER BY revenue DESC LIMIT 10`,
+    trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
+    shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
   };
 }
 
@@ -452,7 +457,7 @@ export default function Dashboard() {
 
         .dash-header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:11px 24px;position:sticky;top:0;z-index:10;border-bottom:1px solid ${t.border};background:${t.headerBg}}
         .dash-content{padding:20px 28px;max-width:1400px;margin:0 auto}
-        .grid-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+        .grid-kpi{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:14px}
         .grid-insights{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px}
         .grid-2col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
         .grid-countries{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin-bottom:18px}
@@ -462,6 +467,9 @@ export default function Dashboard() {
 
         @media(max-width:1100px){
           .grid-insights{grid-template-columns:repeat(3,1fr)}
+        }
+        @media(max-width:1100px){
+          .grid-kpi{grid-template-columns:repeat(3,1fr)}
         }
         @media(max-width:900px){
           .grid-kpi{grid-template-columns:repeat(2,1fr)}
@@ -531,6 +539,11 @@ export default function Dashboard() {
           <KPICard label="Total Shipments"  loading={loading} value={fmt.number(kpis.total_orders)}      sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ordSpark} color="#10b981" t={t}/>
           <KPICard label="Avg Shipment Value" loading={loading} value={fmt.currency(kpis.avg_order_value)} sub="Per shipment" color="#f59e0b" t={t}/>
           <KPICard label="Unique Customers" loading={loading} value={fmt.number(kpis.unique_customers)}  sub="Active shippers" color="#8b5cf6" t={t}/>
+          <KPICard label="Cancellation Rate" loading={loading}
+            value={kpis.cancelled_orders != null && (parseFloat(kpis.total_orders)||0) + (parseFloat(kpis.cancelled_orders)||0) > 0
+              ? `${(parseFloat(kpis.cancelled_orders) / (parseFloat(kpis.total_orders) + parseFloat(kpis.cancelled_orders)) * 100).toFixed(1)}%`
+              : "—"}
+            sub={`${fmt.number(kpis.cancelled_orders)} cancelled`} color="#ef4444" t={t}/>
         </div>
 
         {/* Insights */}
@@ -568,10 +581,10 @@ export default function Dashboard() {
 
         {/* Row 3: countries + tracking */}
         <div className="grid-countries">
-          <Card title="Shipments by Destination Country" accent="#06b6d4" t={t}>
+          <Card title="Revenue by Destination Country" accent="#06b6d4" t={t}>
             {loading
               ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <HorizontalBar data={countriesData} labelKey="label" valueKey="count" color="#06b6d4" maxItems={12} t={t}/>}
+              : <HorizontalBar data={countriesData} labelKey="label" valueKey="revenue" color="#06b6d4" fmtVal={fmt.currency} maxItems={12} t={t}/>}
           </Card>
           <Card title="Tracking Status" accent="#8b5cf6" t={t}>
             {loading
@@ -597,7 +610,25 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Row 4: top customers */}
+        {/* Row 4: service mix */}
+        <div className="grid-2col">
+          <Card title="Service Mix by Shipments" accent="#f97316" t={t}>
+            {loading
+              ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+              : <HorizontalBar
+                  data={(data.shipmentsByService||[]).map(r=>({...r,label:serviceName(r.service)}))}
+                  labelKey="label" valueKey="count" color="#f97316" maxItems={8} t={t}/>}
+          </Card>
+          <Card title="Service Mix by Revenue" accent="#f97316" t={t}>
+            {loading
+              ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+              : <HorizontalBar
+                  data={(data.shipmentsByService||[]).map(r=>({...r,label:serviceName(r.service)}))}
+                  labelKey="label" valueKey="revenue" color="#f97316" fmtVal={fmt.currency} maxItems={8} t={t}/>}
+          </Card>
+        </div>
+
+        {/* Row 5: top customers */}
         <Card title="Top Customers by Revenue" accent="#f59e0b" t={t}>
           {loading
             ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
