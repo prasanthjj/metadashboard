@@ -1099,7 +1099,7 @@ export default function Dashboard() {
 
       {/* ── Footer ── */}
       <div style={{ borderTop:`1px solid ${t.border}`, background:t.headerBg, padding:"18px 28px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
-        <span style={{ fontSize:11, color:t.mu }}>© 2024 Xindus Trade Networks. All Rights Reserved.</span>
+        <span style={{ fontSize:11, color:t.mu }}>© 2026 Xindus Trade Networks. All Rights Reserved.</span>
         <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>
           {lastRefresh ? `Last updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}
         </span>
