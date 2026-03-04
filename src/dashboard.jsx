@@ -5,7 +5,7 @@ const DB_ID  = 2;
 const REFRESH_INTERVAL = 3600; // seconds
 
 // ── Service codes ─────────────────────────────────────────────────────────────
-const SC = { XL:"Lite", AN:"Commercial", AP:"Premium", IP:"ITPS", AE:"XPress", IE:"EMS" };
+const SC = { XL:"Lite", AN:"Commercial", AP:"Premium", AE:"XPress", IP:"ITPS",  IE:"EMS" };
 const serviceName = s => SC[s] || s || "Unknown";
 
 // ── Country codes ─────────────────────────────────────────────────────────────
