@@ -5,8 +5,8 @@ const DB_ID  = 2;
 const REFRESH_INTERVAL = 3600; // seconds
 
 // ── Service codes ─────────────────────────────────────────────────────────────
-const SC = { XL:"XL Lite", AN:"Commercial", AP:"Premium", IP:"ITPS", AE:"XPress", IE:"EMS" };
-const serviceName = s => SC[s] ? `${s} – ${SC[s]}` : (s || "Unknown");
+const SC = { XL:"Lite", AN:"Commercial", AP:"Premium", IP:"ITPS", AE:"XPress", IE:"EMS" };
+const serviceName = s => SC[s] || s || "Unknown";
 
 // ── Country codes ─────────────────────────────────────────────────────────────
 const CC = { US:"United States",GB:"United Kingdom",AU:"Australia",CA:"Canada",DE:"Germany",FR:"France",IT:"Italy",CH:"Switzerland",JP:"Japan",ES:"Spain",NL:"Netherlands",NZ:"New Zealand",MX:"Mexico",AT:"Austria",SE:"Sweden",SG:"Singapore",AE:"UAE",HK:"Hong Kong",BE:"Belgium",DK:"Denmark",FI:"Finland",NO:"Norway",PT:"Portugal",IE:"Ireland",PL:"Poland",ZA:"South Africa",BR:"Brazil",IN:"India",CN:"China",KR:"South Korea",TH:"Thailand",MY:"Malaysia",PH:"Philippines" };
@@ -281,7 +281,7 @@ function HorizontalBar({ data, labelKey, valueKey, color="#3b82f6", fmtVal, maxI
 }
 
 // ── DonutChart ────────────────────────────────────────────────────────────────
-function DonutChart({ data, labelKey, valueKey, t }) {
+function DonutChart({ data, labelKey, valueKey, fmtVal, t }) {
   if (!data?.length) return null;
   const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#f97316"];
   const total = data.reduce((s,d) => s + (parseFloat(d[valueKey])||0), 0);
@@ -294,8 +294,9 @@ function DonutChart({ data, labelKey, valueKey, t }) {
     const ix1=cx+ir*Math.cos(ca-angle), iy1=cy+ir*Math.sin(ca-angle);
     const ix2=cx+ir*Math.cos(ca),       iy2=cy+ir*Math.sin(ca);
     const lg = angle>Math.PI?1:0;
-    return { path:`M${x1},${y1} A${r},${r} 0 ${lg},1 ${x2},${y2} L${ix2},${iy2} A${ir},${ir} 0 ${lg},0 ${ix1},${iy1} Z`, color:COLORS[i%COLORS.length], label:d[labelKey], pct:((val/total)*100).toFixed(1) };
+    return { path:`M${x1},${y1} A${r},${r} 0 ${lg},1 ${x2},${y2} L${ix2},${iy2} A${ir},${ir} 0 ${lg},0 ${ix1},${iy1} Z`, color:COLORS[i%COLORS.length], label:d[labelKey], val, pct:((val/total)*100).toFixed(1) };
   });
+  const displayVal = s => fmtVal ? fmtVal(s.val) : fmt.number(s.val);
   return (
     <div style={{ display:"flex", gap:16, alignItems:"center" }}>
       <svg width={sz} height={sz}>{slices.map((s,i) => <path key={i} d={s.path} fill={s.color} opacity={0.85}/>)}</svg>
@@ -304,7 +305,8 @@ function DonutChart({ data, labelKey, valueKey, t }) {
           <div key={i} style={{ display:"flex", alignItems:"center", gap:6 }}>
             <div style={{ width:8, height:8, borderRadius:2, background:s.color, flexShrink:0 }}/>
             <span style={{ fontSize:11, color:t.t3, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.label||"Unknown"}</span>
-            <span style={{ fontSize:11, color:t.s, fontFamily:"monospace" }}>{s.pct}%</span>
+            <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>{s.pct}%</span>
+            <span style={{ fontSize:11, color:t.s, fontFamily:"monospace" }}>{displayVal(s)}</span>
           </div>
         ))}
       </div>
@@ -615,16 +617,16 @@ export default function Dashboard() {
           <Card title="Service Mix by Shipments" accent="#f97316" t={t}>
             {loading
               ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <HorizontalBar
+              : <DonutChart
                   data={(data.shipmentsByService||[]).map(r=>({...r,label:serviceName(r.service)}))}
-                  labelKey="label" valueKey="count" color="#f97316" maxItems={8} t={t}/>}
+                  labelKey="label" valueKey="count" t={t}/>}
           </Card>
           <Card title="Service Mix by Revenue" accent="#f97316" t={t}>
             {loading
               ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <HorizontalBar
+              : <DonutChart
                   data={(data.shipmentsByService||[]).map(r=>({...r,label:serviceName(r.service)}))}
-                  labelKey="label" valueKey="revenue" color="#f97316" fmtVal={fmt.currency} maxItems={8} t={t}/>}
+                  labelKey="label" valueKey="revenue" fmtVal={fmt.currency} t={t}/>}
           </Card>
         </div>
 
