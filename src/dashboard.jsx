@@ -218,13 +218,39 @@ function Sparkline({ data, color="#3b82f6" }) {
 }
 
 // ── BarChart ──────────────────────────────────────────────────────────────────
-function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, t }) {
-  const [tip, setTip] = useState(null); // { i, x, y }
+function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, trendColor="#f59e0b", showTrend=false, t }) {
+  const [tip, setTip] = useState(null);
+  const containerRef = useRef(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(e => setWidth(e[0].contentRect.width));
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   if (!data?.length) return <div style={{ height, display:"flex", alignItems:"center", justifyContent:"center", color:t.mu, fontSize:12 }}>No data</div>;
   const vals = data.map(d => parseFloat(d[yKey]) || 0);
   const max = Math.max(...vals, 1);
+  const barAreaH = height - 30; // leave room for date labels
+
+  // linear regression trend line
+  const trendLine = (() => {
+    if (!showTrend || !width || vals.length < 2) return null;
+    const n = vals.length;
+    const xs = vals.map((_,i) => i), ys = vals;
+    const sx = xs.reduce((a,b)=>a+b,0), sy = ys.reduce((a,b)=>a+b,0);
+    const sxy = xs.reduce((a,i)=>a+i*ys[i],0), sxx = xs.reduce((a,x)=>a+x*x,0);
+    const m = (n*sxy - sx*sy) / (n*sxx - sx*sx);
+    const b = (sy - m*sx) / n;
+    const barW = width / n;
+    const toX = i => i * barW + barW / 2;
+    const toY = v => barAreaH - (v / max) * barAreaH;
+    return { x1: toX(0), y1: toY(b), x2: toX(n-1), y2: toY(m*(n-1)+b) };
+  })();
+
   return (
-    <div style={{ position:"relative" }}>
+    <div style={{ position:"relative" }} ref={containerRef}>
       <div style={{ display:"flex", alignItems:"flex-end", gap:2, height, width:"100%" }}>
         {data.map((d,i) => (
           <div key={i}
@@ -240,6 +266,13 @@ function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, t
           </div>
         ))}
       </div>
+      {trendLine && (
+        <svg style={{ position:"absolute", top:0, left:0, width:"100%", height:barAreaH, pointerEvents:"none", overflow:"visible" }}>
+          <line x1={trendLine.x1} y1={trendLine.y1} x2={trendLine.x2} y2={trendLine.y2}
+            stroke={trendColor} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.8"/>
+          <circle cx={trendLine.x2} cy={trendLine.y2} r="3" fill={trendColor} opacity="0.9"/>
+        </svg>
+      )}
       {tip !== null && (() => {
         const d = data[tip.i];
         return (
@@ -571,7 +604,7 @@ export default function Dashboard() {
           <Card title="Daily Revenue" accent="#3b82f6" t={t}>
             {loading
               ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <BarChart data={data.dailyRevenue||[]} xKey="day" yKey="revenue" color="#3b82f6" height={140} t={t}/>}
+              : <BarChart data={data.dailyRevenue||[]} xKey="day" yKey="revenue" color="#3b82f6" height={140} showTrend trendColor="#f59e0b" t={t}/>}
           </Card>
           <Card title="Shipments by Status" accent="#10b981" t={t}>
             {loading
