@@ -81,8 +81,9 @@ const IP_STATUS = { SHIPMENT_CREATED:"Created", SHIPMENT_READY_FOR_PICKUP:"Ready
 const ipStatusLabel = s => IP_STATUS[s] || (s?.replace(/^SHIPMENT_/,"").replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())) || "Unknown";
 
 // ── Queries ───────────────────────────────────────────────────────────────────
-const REV  = `CASE WHEN iscancelled=1 THEN 0 ELSE CASE WHEN final_charge_updated=0 THEN advanceamount ELSE totalamount END END`;
-const ACTF = `all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION')`;
+const REV    = `CASE WHEN iscancelled=1 THEN 0 ELSE CASE WHEN final_charge_updated=0 THEN advanceamount ELSE totalamount END END`;
+const WEIGHT = `CASE WHEN iscancelled=1 THEN 0 ELSE CASE WHEN final_charge_updated=0 THEN chargeableweight ELSE final_chargeable_weight END END`;
+const ACTF   = `all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION')`;
 
 function makeQueries(start, end) {
   const df  = `created_on>='${start}' AND created_on<DATE_ADD('${end}',INTERVAL 1 DAY)`;
@@ -90,7 +91,7 @@ function makeQueries(start, end) {
   return {
     kpis:              `SELECT COUNT(CASE WHEN iscancelled=0 THEN id END) as total_orders, SUM(${REV}) as total_revenue, ROUND(SUM(${REV})/NULLIF(COUNT(CASE WHEN iscancelled=0 THEN id END),0),2) as avg_order_value, COUNT(DISTINCT CASE WHEN iscancelled=0 THEN customerid END) as unique_customers, COUNT(CASE WHEN iscancelled=1 THEN id END) as cancelled_orders FROM orders WHERE ${df} AND ${ACTF}`,
     ordersByStatus:    `SELECT status,COUNT(*) as count FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} GROUP BY status ORDER BY count DESC LIMIT 10`,
-    dailyRevenue:      `SELECT DATE(created_on) as day,COUNT(CASE WHEN iscancelled=0 THEN id END) as orders,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} GROUP BY DATE(created_on) ORDER BY day ASC`,
+    dailyRevenue:      `SELECT DATE(created_on) as day,COUNT(CASE WHEN iscancelled=0 THEN id END) as orders,SUM(${REV}) as revenue,SUM(${WEIGHT}) as daily_load FROM orders WHERE ${df} AND ${ACTF} GROUP BY DATE(created_on) ORDER BY day ASC`,
     topCountries:      `SELECT destination_country,SUM(${REV}) as revenue,COUNT(CASE WHEN iscancelled=0 THEN id END) as count FROM orders WHERE ${df} AND ${ACTF} GROUP BY destination_country ORDER BY revenue DESC LIMIT 12`,
     topCustomers:      `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
@@ -259,7 +260,7 @@ function Sparkline({ data, color="#3b82f6" }) {
 }
 
 // ── BarChart ──────────────────────────────────────────────────────────────────
-function BarChart({ data, xKey, yKey, fmtTooltip, fmtSecondary, color="#3b82f6", height=130, trendColor="#f59e0b", showTrend=false, t }) {
+function BarChart({ data, xKey, yKey, fmtTooltip, fmtSecondary, fmtTertiary, color="#3b82f6", height=130, trendColor="#f59e0b", showTrend=false, t }) {
   const [tip, setTip] = useState(null);
   const containerRef = useRef(null);
   const [width, setWidth] = useState(0);
@@ -324,6 +325,7 @@ function BarChart({ data, xKey, yKey, fmtTooltip, fmtSecondary, color="#3b82f6",
             {fmtSecondary
               ? <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmtSecondary(d)}</div>
               : d.orders !== undefined && <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmt.number(d.orders)} shipments</div>}
+            {fmtTertiary && <div style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>{fmtTertiary(d)}</div>}
           </div>
         );
       })()}
@@ -755,7 +757,8 @@ export default function Dashboard() {
           <Card title="Daily Revenue" accent="#3b82f6" t={t}>
             {loading
               ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <BarChart data={data.dailyRevenue||[]} xKey="day" yKey="revenue" color="#3b82f6" height={140} showTrend trendColor="#f59e0b" t={t}/>}
+              : <BarChart data={data.dailyRevenue||[]} xKey="day" yKey="revenue" color="#3b82f6" height={140} showTrend trendColor="#f59e0b"
+                  fmtTertiary={d => d.daily_load != null ? `${parseFloat(d.daily_load).toLocaleString("en-IN",{maximumFractionDigits:1})} kg` : null} t={t}/>}
           </Card>
           <Card title="Shipments by Status" accent="#10b981" t={t}>
             {loading
