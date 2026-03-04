@@ -39,6 +39,30 @@ const THEMES = {
     p:"#1c1208", s:"#3d2b12", t3:"#6b4226", mu:"#9a6232", di:"#b07840", fa:"#e8c38a",
     sk:"#fde8c5", rh:"#fef4e6",
   },
+  forest: {
+    label:"Forest", swatch:"#0a1e12", dark:true,
+    bg:"#060e08", cardBg:"#0a1e12", border:"#163d22", headerBg:"#060e08",
+    p:"#d1fae5", s:"#a7f3d0", t3:"#6ee7b7", mu:"#4ade80", di:"#166534", fa:"#14532d",
+    sk:"#163d22", rh:"#0d2619",
+  },
+  ocean: {
+    label:"Ocean", swatch:"#0a1929", dark:true,
+    bg:"#050d1a", cardBg:"#0a1929", border:"#132f4c", headerBg:"#050d1a",
+    p:"#e3f2fd", s:"#90caf9", t3:"#64b5f6", mu:"#42a5f5", di:"#1565c0", fa:"#0a3060",
+    sk:"#132f4c", rh:"#0a1929",
+  },
+  midnight: {
+    label:"Midnight", swatch:"#130527", dark:true,
+    bg:"#0a0217", cardBg:"#130527", border:"#2d0a5e", headerBg:"#0a0217",
+    p:"#f3e8ff", s:"#e9d5ff", t3:"#d8b4fe", mu:"#c084fc", di:"#6b21a8", fa:"#4a044e",
+    sk:"#2d0a5e", rh:"#1e0a3a",
+  },
+  rose: {
+    label:"Rose", swatch:"#fff0f2", dark:false,
+    bg:"#fff0f2", cardBg:"#ffffff", border:"#fecdd3", headerBg:"#ffffff",
+    p:"#1a0609", s:"#5b1a23", t3:"#9f2d3a", mu:"#b05a64", di:"#e9a0a9", fa:"#fecdd3",
+    sk:"#ffe4e6", rh:"#fff0f2",
+  },
 };
 const THEME_KEYS = Object.keys(THEMES);
 
@@ -75,12 +99,13 @@ function makeQueries(start, end) {
     tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
     ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
     ipStatusFlow:      `SELECT status, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY status ORDER BY count DESC LIMIT 15`,
-    ipDailyTrend:      `SELECT DATE(created_on) as day, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} GROUP BY DATE(created_on) ORDER BY day ASC`,
+    ipDailyTrend:      `SELECT DATE(created_on) as day, COUNT(*) as shipments, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} GROUP BY DATE(created_on) ORDER BY day ASC`,
     ipMailType:        `SELECT i.mail_type_cd, COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE ${odf} AND o.iscancelled=0 GROUP BY i.mail_type_cd ORDER BY count DESC`,
     ipPendingCustoms:  `SELECT COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE i.customs_query_response IS NOT NULL AND JSON_LENGTH(i.customs_query_response)>0 AND (i.query_submission_response IS NULL OR JSON_LENGTH(i.query_submission_response)=0) AND o.iscancelled=0`,
     ipOnHold:          `SELECT o.scancode, o.destination_country, DATE(o.created_on) as created, o.status FROM orders o WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND o.iscancelled=0 AND o.status IN ('SHIPMENT_ON_HOLD_AT_ORIGIN_CUSTOMS','SHIPMENT_ON_HOLD_AT_DESTINATION_CUSTOMS') ORDER BY o.created_on DESC LIMIT 100`,
     ipCountries:       `SELECT destination_country, COUNT(*) as count, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
     ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
+    ipTatDistribution: `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
   };
 }
 
@@ -233,7 +258,7 @@ function Sparkline({ data, color="#3b82f6" }) {
 }
 
 // ── BarChart ──────────────────────────────────────────────────────────────────
-function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, trendColor="#f59e0b", showTrend=false, t }) {
+function BarChart({ data, xKey, yKey, fmtTooltip, fmtSecondary, color="#3b82f6", height=130, trendColor="#f59e0b", showTrend=false, t }) {
   const [tip, setTip] = useState(null);
   const containerRef = useRef(null);
   const [width, setWidth] = useState(0);
@@ -295,7 +320,9 @@ function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, t
             background: t.cardBg, border:`1px solid ${t.border}`, borderRadius:7, padding:"6px 10px", boxShadow:"0 4px 16px #00000044", whiteSpace:"nowrap" }}>
             <div style={{ fontSize:11, color:t.mu, fontFamily:"monospace", marginBottom:2 }}>{fmt.date(d[xKey])}</div>
             <div style={{ fontSize:13, fontWeight:700, color:t.p, fontFamily:"monospace" }}>{fmtTooltip ? fmtTooltip(d) : fmt.currency(vals[tip.i])}</div>
-            {d.orders !== undefined && <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmt.number(d.orders)} shipments</div>}
+            {fmtSecondary
+              ? <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmtSecondary(d)}</div>
+              : d.orders !== undefined && <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmt.number(d.orders)} shipments</div>}
           </div>
         );
       })()}
@@ -468,6 +495,44 @@ function OnHoldList({ rows, pendingCustoms, loading, t }) {
   );
 }
 
+// ── ThemeSelector ─────────────────────────────────────────────────────────────
+function ThemeSelector({ themeKey, setThemeKey, t }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function h(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const cur = THEMES[themeKey];
+  return (
+    <div ref={ref} style={{ position:"relative" }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display:"flex", alignItems:"center", gap:6, background:t.cardBg, border:`1px solid ${t.border}`, color:t.s, borderRadius:7, padding:"5px 10px", fontSize:11, cursor:"pointer", fontFamily:"monospace", whiteSpace:"nowrap" }}>
+        <div style={{ width:11, height:11, borderRadius:3, background:cur.swatch, border:`1px solid ${t.border}`, flexShrink:0 }}/>
+        {cur.label}
+        <span style={{ fontSize:9, color:t.mu, marginLeft:2 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, zIndex:300, background:t.cardBg, border:`1px solid ${t.border}`, borderRadius:9, padding:5, boxShadow:"0 8px 32px #00000055", minWidth:130 }}>
+          {THEME_KEYS.map(key => {
+            const th = THEMES[key];
+            const active = key === themeKey;
+            return (
+              <button key={key} onClick={() => { setThemeKey(key); localStorage.setItem("theme", key); setOpen(false); }}
+                style={{ display:"flex", alignItems:"center", gap:8, width:"100%", padding:"7px 10px", background: active ? `${t.border}` : "transparent", border:"none", borderRadius:6, color: active ? t.p : t.s, cursor:"pointer", fontSize:11, fontFamily:"monospace", textAlign:"left" }}>
+                <div style={{ width:16, height:16, borderRadius:4, background:th.swatch, border:`1px solid ${th.dark ? "#ffffff22" : "#00000022"}`, flexShrink:0 }}/>
+                <span style={{ flex:1 }}>{th.label}</span>
+                {active && <span style={{ fontSize:9, color:"#3b82f6" }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [data,        setData]        = useState({});
@@ -625,19 +690,7 @@ export default function Dashboard() {
         </div>
 
         <div className="header-right">
-          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-            {THEME_KEYS.map(key => (
-              <button key={key} title={THEMES[key].label} onClick={() => { setThemeKey(key); localStorage.setItem("theme", key); }}
-                style={{
-                  width:20, height:20, borderRadius:"50%",
-                  background: THEMES[key].swatch,
-                  border: `2px solid ${themeKey===key ? "#3b82f6" : (THEMES[key].dark ? "#ffffff33" : "#00000033")}`,
-                  boxShadow: themeKey===key ? "0 0 0 2px #3b82f655" : "none",
-                  cursor:"pointer", padding:0, transition:"box-shadow 0.15s",
-                  outline: THEMES[key].swatch==="#f8fafc" ? `1px solid ${t.border}` : "none",
-                }}/>
-            ))}
-          </div>
+          <ThemeSelector themeKey={themeKey} setThemeKey={setThemeKey} t={t}/>
           {error && <span style={{ fontSize:11, color:"#ef4444", background:"#ef444415", padding:"3px 9px", borderRadius:6 }}>⚠ {error}</span>}
           <div style={{ display:"flex", alignItems:"center", gap:6 }}>
             <div style={{ width:6, height:6, borderRadius:"50%", background:loading?"#f59e0b":"#10b981", boxShadow:`0 0 7px ${loading?"#f59e0b":"#10b981"}` }}/>
@@ -653,7 +706,7 @@ export default function Dashboard() {
       {/* ── Content ── */}
       {/* ── Tab bar ── */}
       <div style={{ display:"flex", gap:0, padding:"0 24px", background:t.headerBg, borderBottom:`1px solid ${t.border}`, position:"sticky", top:53, zIndex:9 }}>
-        {[["main","Operations"],["indiapost","IndiaPost"]].map(([key,label]) => (
+        {[["main","Overall"],["indiapost","IndiaPost"]].map(([key,label]) => (
           <button key={key} onClick={() => setActiveTab(key)} style={{ padding:"10px 20px", fontSize:12, fontWeight:600, background:"none", border:"none", borderBottom: activeTab===key ? `2px solid #3b82f6` : "2px solid transparent", color: activeTab===key ? "#3b82f6" : t.mu, cursor:"pointer", transition:"color 0.15s", marginBottom:-1 }}>
             {label}
           </button>
@@ -920,7 +973,8 @@ export default function Dashboard() {
                 {loading
                   ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
                   : <BarChart data={data.ipDailyTrend||[]} xKey="day" yKey="shipments" color="#ef4444" height={140}
-                      fmtTooltip={d => `${fmt.number(d.shipments)} shipments`} t={t}/>}
+                      fmtTooltip={d => `${fmt.number(d.shipments)} shipments`}
+                      fmtSecondary={d => fmt.currency(d.revenue)} t={t}/>}
               </Card>
               <Card title="Mail Type" accent="#8b5cf6" t={t}>
                 {loading
@@ -937,20 +991,25 @@ export default function Dashboard() {
                     const rows = data.ipStatusFlow||[];
                     if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
                     const total = rows.reduce((s,r) => s+(parseFloat(r.count)||0), 0)||1;
+                    const maxCount = Math.max(...rows.map(r => parseFloat(r.count)||0), 1);
                     return (
-                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                         {rows.map((r,i) => {
-                          const pct = (parseFloat(r.count)||0)/total*100;
+                          const val = parseFloat(r.count)||0;
+                          const pct = (val/total)*100;
+                          const barW = (val/maxCount)*100;
                           const c = statusColor(r.status);
                           return (
-                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                              <div style={{ width:3, height:16, borderRadius:2, background:c, flexShrink:0 }}/>
-                              <span style={{ fontSize:11, color:t.s, width:200, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ipStatusLabel(r.status)}</span>
-                              <div style={{ flex:1, height:5, background:t.sk, borderRadius:3 }}>
-                                <div style={{ width:`${pct}%`, height:"100%", background:`${c}99`, borderRadius:3 }}/>
+                            <div key={i}>
+                              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:3 }}>
+                                <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, marginRight:8 }}>{ipStatusLabel(r.status)}</span>
+                                <span style={{ fontSize:11, color:c, fontFamily:"monospace", flexShrink:0 }}>
+                                  {val.toLocaleString("en-IN")} <span style={{ color:t.mu, fontWeight:400 }}>({pct.toFixed(1)}%)</span>
+                                </span>
                               </div>
-                              <span style={{ fontSize:11, color:c, fontFamily:"monospace", width:44, textAlign:"right", flexShrink:0 }}>{parseInt(r.count).toLocaleString("en-IN")}</span>
-                              <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", width:36, textAlign:"right", flexShrink:0 }}>{pct.toFixed(1)}%</span>
+                              <div style={{ height:14, background:t.sk, borderRadius:3, overflow:"hidden" }}>
+                                <div style={{ width:`${barW}%`, height:"100%", background:`${c}cc`, borderRadius:3 }}/>
+                              </div>
                             </div>
                           );
                         })}
@@ -987,6 +1046,54 @@ export default function Dashboard() {
                   : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="revenue" color="#f97316" fmtVal={fmt.currency} maxItems={10} t={t}/>}
               </Card>
             </div>
+
+            {/* IP TAT distribution */}
+            <Card title="IndiaPost TAT Distribution (Pickup → Delivered)" accent="#8b5cf6" t={t} style={{ marginBottom:14 }}>
+              {loading
+                ? <div style={{ height:120, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                : (() => {
+                    const rows = data.ipTatDistribution||[];
+                    if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data — try a wider date range</div>;
+                    const total = rows.reduce((s,r) => s+(parseFloat(r.shipments)||0), 0);
+                    const within14 = rows.filter(r=>r.sort_order<=2).reduce((s,r)=>s+(parseFloat(r.shipments)||0),0);
+                    const sla = total>0 ? (within14/total*100).toFixed(1) : null;
+                    const max = Math.max(...rows.map(r=>parseFloat(r.shipments)||0), 1);
+                    const COLORS = { "1–7d":"#10b981", "8–14d":"#3b82f6", "15–21d":"#f59e0b", "22–28d":"#f97316", "29+d":"#ef4444" };
+                    return (
+                      <div>
+                        <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
+                          {sla != null && <div style={{ background:t.sk, borderRadius:8, padding:"8px 16px", textAlign:"center" }}>
+                            <div style={{ fontSize:18, fontWeight:700, color: parseFloat(sla)>=80?"#10b981":"#f59e0b", fontFamily:"monospace" }}>{sla}%</div>
+                            <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Delivered ≤14 days</div>
+                          </div>}
+                          <div style={{ background:t.sk, borderRadius:8, padding:"8px 16px", textAlign:"center" }}>
+                            <div style={{ fontSize:18, fontWeight:700, color:t.p, fontFamily:"monospace" }}>{total.toLocaleString("en-IN")}</div>
+                            <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Total delivered</div>
+                          </div>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:100 }}>
+                          {rows.map((r,i) => {
+                            const val = parseFloat(r.shipments)||0;
+                            const pct = (val/max)*100;
+                            const color = COLORS[r.bucket]||"#8b5cf6";
+                            return (
+                              <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", height:"100%" }}>
+                                <div style={{ flex:1, width:"100%", display:"flex", alignItems:"flex-end" }}>
+                                  <div style={{ width:"100%", background:`${color}33`, borderRadius:"4px 4px 0 0", height:`${pct}%`, minHeight:val>0?4:0, position:"relative" }}>
+                                    <div style={{ position:"absolute", bottom:0, left:0, right:0, height:3, background:color, borderRadius:2 }}/>
+                                    <div style={{ position:"absolute", top:-18, left:"50%", transform:"translateX(-50%)", fontSize:10, color:t.s, fontFamily:"monospace", whiteSpace:"nowrap" }}>{val.toLocaleString("en-IN")}</div>
+                                  </div>
+                                </div>
+                                <div style={{ fontSize:11, color, fontFamily:"monospace", marginTop:6, fontWeight:600 }}>{r.bucket}</div>
+                                <div style={{ fontSize:9, color:t.mu, fontFamily:"monospace" }}>{total>0?(val/total*100).toFixed(0):"0"}%</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+            </Card>
 
             <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
               <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>IndiaPost · LP% and EY% scancodes · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
