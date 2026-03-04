@@ -84,7 +84,7 @@ const fmt = {
   currency: n => { if (!n && n!==0) return "—"; const v=parseFloat(n); if(v>=1e7) return `₹${(v/1e7).toFixed(2)}Cr`; if(v>=1e5) return `₹${(v/1e5).toFixed(1)}L`; if(v>=1000) return `₹${(v/1000).toFixed(1)}K`; return `₹${v.toFixed(0)}`; },
   number:   n => (!n && n!==0) ? "—" : parseFloat(n).toLocaleString("en-IN"),
   date:     d => !d ? "—" : new Date(d).toLocaleDateString("en-IN",{day:"2-digit",month:"short"}),
-  countdown:s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`,
+  countdown:s => `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.floor((s%3600)/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`,
 };
 
 const statusColor = s => {
