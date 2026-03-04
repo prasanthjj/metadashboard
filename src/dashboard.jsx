@@ -96,6 +96,7 @@ function makeQueries(start, end) {
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
+    commercialCustomers:`SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(o.id) as order_count, SUM(CASE WHEN o.final_charge_updated=0 THEN o.advanceamount ELSE o.totalamount END) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.lmcarrier NOT LIKE '%indiapost%' AND o.paymentstatus='completed' AND o.shippingmethod NOT IN ('AN','IP','IE') GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 15`,
     tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
     ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
     ipStatusFlow:      `SELECT status, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY status ORDER BY count DESC LIMIT 15`,
@@ -944,6 +945,43 @@ export default function Dashboard() {
             )}
         </Card>
 
+        {/* Row 8: Commercial customer revenue */}
+        <Card title="Commercial Customer Revenue Distribution  ·  Lite / Premium / XPress  ·  Completed payments  ·  Excl. IndiaPost" accent="#06b6d4" t={t} style={{ marginTop:14 }}>
+          {loading
+            ? <div style={{ height:220, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+            : (() => {
+                const rows = data.commercialCustomers||[];
+                if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                const totalRev = rows.reduce((s,r) => s+(parseFloat(r.revenue)||0), 0);
+                const maxRev   = Math.max(...rows.map(r => parseFloat(r.revenue)||0), 1);
+                return (
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {rows.map((r,i) => {
+                      const rev = parseFloat(r.revenue)||0;
+                      const pct = totalRev > 0 ? (rev/totalRev*100) : 0;
+                      const barW = (rev/maxRev)*100;
+                      return (
+                        <div key={i} style={{ display:"grid", gridTemplateColumns:"22px 1fr 160px 80px 76px", gap:"0 10px", alignItems:"center" }}>
+                          <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", textAlign:"right" }}>{i+1}</span>
+                          <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</span>
+                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            <div style={{ flex:1, height:5, background:t.sk, borderRadius:3 }}>
+                              <div style={{ width:`${barW}%`, height:"100%", background:"#06b6d499", borderRadius:3 }}/>
+                            </div>
+                          </div>
+                          <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", textAlign:"right" }}>{fmt.currency(rev)}</span>
+                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", textAlign:"right" }}>{pct.toFixed(1)}%</span>
+                        </div>
+                      );
+                    })}
+                    <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:8, display:"flex", justifyContent:"space-between", marginTop:4 }}>
+                      <span style={{ fontSize:11, color:t.mu }}>{rows.length} customers</span>
+                      <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(totalRev)} total</span>
+                    </div>
+                  </div>
+                );
+              })()}
+        </Card>
 
       </>}
 
