@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const PROXY = "/api/v2";
 const DB_ID  = 2;
-const REFRESH_INTERVAL = 3600; // seconds
+const REFRESH_INTERVAL = 10800; // seconds
 
 // ── Service codes ─────────────────────────────────────────────────────────────
 const SC = { XL:"Lite", AN:"Commercial", AP:"Premium", AE:"XPress", IP:"ITPS",  IE:"EMS" };
