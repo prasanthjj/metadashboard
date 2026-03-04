@@ -497,8 +497,7 @@ export default function Dashboard() {
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <div style={{ width:30, height:30, borderRadius:8, background:"linear-gradient(135deg,#3b82f6,#8b5cf6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>◈</div>
           <div>
-            <div style={{ fontSize:15, fontWeight:700, color:t.p }}>Operations Dashboard</div>
-            <div style={{ fontSize:10, color:t.di, fontFamily:"monospace" }}>Production</div>
+            <div style={{ fontSize:15, fontWeight:700, color:t.p }}>Xindus Dashboard</div>
           </div>
         </div>
 
