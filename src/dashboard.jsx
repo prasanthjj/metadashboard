@@ -402,13 +402,14 @@ export default function Dashboard() {
         label: "Revenue Trend",
         value: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`,
         sub: `second half vs first half`,
+        spark: revSpark, sparkColor: pct >= 0 ? "#10b981" : "#ef4444",
       });
     }
 
     // Peak revenue day
     if (rev.length) {
       const peak = rev.reduce((b,d) => (parseFloat(d.revenue)||0) > (parseFloat(b.revenue)||0) ? d : b, rev[0]);
-      list.push({ icon: "◆", positive: true, label: "Peak Day", value: fmt.currency(peak.revenue), sub: fmt.date(peak.day) });
+      list.push({ icon: "◆", positive: true, label: "Peak Day", value: fmt.currency(peak.revenue), sub: fmt.date(peak.day), spark: revSpark, sparkColor: "#3b82f6" });
     }
 
     // Top destination
@@ -417,7 +418,7 @@ export default function Dashboard() {
       const total = ctries.reduce((s,c) => s + (parseFloat(c.count)||0), 0);
       const top   = ctries[0];
       const pct   = total > 0 ? ((parseFloat(top.count)/total)*100).toFixed(0) : 0;
-      list.push({ icon: "◉", positive: true, label: "Top Market", value: countryName(top.destination_country), sub: `${pct}% of shipments` });
+      list.push({ icon: "◉", positive: true, label: "Top Market", value: countryName(top.destination_country), sub: `${pct}% of shipments`, spark: ordSpark, sparkColor: "#06b6d4" });
     }
 
     // Top customer revenue share
@@ -426,7 +427,7 @@ export default function Dashboard() {
       const top  = custs[0];
       const pct  = ((parseFloat(top.revenue)||0) / parseFloat(kpis.total_revenue) * 100).toFixed(1);
       const name = top.customer_name?.split(" ").slice(0,2).join(" ") || "—";
-      list.push({ icon: "★", positive: true, label: "Top Customer", value: name, sub: `${pct}% of revenue` });
+      list.push({ icon: "★", positive: true, label: "Top Customer", value: name, sub: `${pct}% of revenue`, spark: revSpark, sparkColor: "#f59e0b" });
     }
 
     // Daily averages
@@ -434,7 +435,7 @@ export default function Dashboard() {
       const days    = rev.length;
       const avgShip = Math.round(parseFloat(kpis.total_orders) / days);
       const avgRev  = parseFloat(kpis.total_revenue) / days;
-      list.push({ icon: "≈", positive: true, label: "Daily Average", value: `${fmt.number(avgShip)} ships`, sub: `${fmt.currency(avgRev)} revenue/day` });
+      list.push({ icon: "≈", positive: true, label: "Daily Average", value: `${fmt.number(avgShip)} ships`, sub: `${fmt.currency(avgRev)} revenue/day`, spark: ordSpark, sparkColor: "#8b5cf6" });
     }
 
     return list;
@@ -448,11 +449,41 @@ export default function Dashboard() {
         .fade{animation:fadeIn .4s ease forwards}
         tr.rh:hover td{background:${t.rh} !important}
         *{box-sizing:border-box}
+
+        .dash-header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:11px 24px;position:sticky;top:0;z-index:10;border-bottom:1px solid ${t.border};background:${t.headerBg}}
+        .dash-content{padding:20px 28px;max-width:1400px;margin:0 auto}
+        .grid-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+        .grid-insights{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px}
+        .grid-2col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+        .grid-countries{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin-bottom:18px}
+        .grid-customers{display:grid;grid-template-columns:1fr 1fr;gap:6px 32px}
+        .header-right{display:flex;align-items:center;gap:10px}
+        .header-datepicker{flex:1}
+
+        @media(max-width:1100px){
+          .grid-insights{grid-template-columns:repeat(3,1fr)}
+        }
+        @media(max-width:900px){
+          .grid-kpi{grid-template-columns:repeat(2,1fr)}
+          .grid-2col{grid-template-columns:1fr}
+          .grid-countries{grid-template-columns:1fr}
+          .grid-insights{grid-template-columns:repeat(2,1fr)}
+        }
+        @media(max-width:640px){
+          .dash-header{flex-direction:column;align-items:stretch;gap:10px;padding:12px 16px}
+          .dash-content{padding:14px 16px}
+          .header-datepicker{width:100%}
+          .header-right{justify-content:space-between}
+          .grid-kpi{grid-template-columns:repeat(2,1fr);gap:10px}
+          .grid-2col{gap:10px}
+          .grid-countries{gap:10px}
+          .grid-insights{grid-template-columns:repeat(2,1fr);gap:8px}
+          .grid-customers{grid-template-columns:1fr}
+        }
       `}</style>
 
       {/* ── Header ── */}
-      <div style={{ borderBottom:`1px solid ${t.border}`, padding:"11px 24px", display:"flex", alignItems:"center", gap:14, background:t.headerBg, position:"sticky", top:0, zIndex:10, flexWrap:"wrap" }}>
-
+      <div className="dash-header">
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <div style={{ width:30, height:30, borderRadius:8, background:"linear-gradient(135deg,#3b82f6,#8b5cf6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>◈</div>
           <div>
@@ -461,28 +492,24 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Date picker */}
-        <div style={{ flex:1 }}>
+        <div className="header-datepicker">
           <DateRangePicker value={dateRange} onChange={setDateRange} t={t}/>
         </div>
 
-        {/* Theme dots */}
-        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-          {THEME_KEYS.map(key => (
-            <button key={key} title={THEMES[key].label} onClick={() => { setThemeKey(key); localStorage.setItem("theme", key); }}
-              style={{
-                width:20, height:20, borderRadius:"50%",
-                background: THEMES[key].swatch,
-                border: `2px solid ${themeKey===key ? "#3b82f6" : (THEMES[key].dark ? "#ffffff33" : "#00000033")}`,
-                boxShadow: themeKey===key ? "0 0 0 2px #3b82f655" : "none",
-                cursor:"pointer", padding:0, transition:"box-shadow 0.15s",
-                outline: THEMES[key].swatch==="#f8fafc" ? `1px solid ${t.border}` : "none",
-              }}/>
-          ))}
-        </div>
-
-        {/* Status */}
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div className="header-right">
+          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+            {THEME_KEYS.map(key => (
+              <button key={key} title={THEMES[key].label} onClick={() => { setThemeKey(key); localStorage.setItem("theme", key); }}
+                style={{
+                  width:20, height:20, borderRadius:"50%",
+                  background: THEMES[key].swatch,
+                  border: `2px solid ${themeKey===key ? "#3b82f6" : (THEMES[key].dark ? "#ffffff33" : "#00000033")}`,
+                  boxShadow: themeKey===key ? "0 0 0 2px #3b82f655" : "none",
+                  cursor:"pointer", padding:0, transition:"box-shadow 0.15s",
+                  outline: THEMES[key].swatch==="#f8fafc" ? `1px solid ${t.border}` : "none",
+                }}/>
+            ))}
+          </div>
           {error && <span style={{ fontSize:11, color:"#ef4444", background:"#ef444415", padding:"3px 9px", borderRadius:6 }}>⚠ {error}</span>}
           <div style={{ display:"flex", alignItems:"center", gap:6 }}>
             <div style={{ width:6, height:6, borderRadius:"50%", background:loading?"#f59e0b":"#10b981", boxShadow:`0 0 7px ${loading?"#f59e0b":"#10b981"}` }}/>
@@ -496,10 +523,10 @@ export default function Dashboard() {
       </div>
 
       {/* ── Content ── */}
-      <div style={{ padding:"20px 28px", maxWidth:1400, margin:"0 auto" }} className="fade">
+      <div className="dash-content fade">
 
         {/* KPIs */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom: insights.length ? 14 : 18 }}>
+        <div className="grid-kpi">
           <KPICard label="Total Revenue"    loading={loading} value={fmt.currency(kpis.total_revenue)}   sub={`${dateRange.start} → ${dateRange.end}`} sparkData={revSpark} color="#3b82f6" t={t}/>
           <KPICard label="Total Shipments"  loading={loading} value={fmt.number(kpis.total_orders)}      sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ordSpark} color="#10b981" t={t}/>
           <KPICard label="Avg Shipment Value" loading={loading} value={fmt.currency(kpis.avg_order_value)} sub="Per shipment" color="#f59e0b" t={t}/>
@@ -508,14 +535,17 @@ export default function Dashboard() {
 
         {/* Insights */}
         {insights.length > 0 && (
-          <div style={{ display:"grid", gridTemplateColumns:`repeat(${insights.length},1fr)`, gap:10, marginBottom:18 }}>
+          <div className="grid-insights">
             {insights.map((ins, i) => (
-              <div key={i} style={{ background:t.cardBg, border:`1px solid ${t.border}`, borderRadius:10, padding:"12px 16px", display:"flex", gap:12, alignItems:"flex-start" }}>
-                <span style={{ fontSize:16, color: ins.positive ? "#10b981" : "#ef4444", lineHeight:1, marginTop:2, flexShrink:0 }}>{ins.icon}</span>
-                <div style={{ minWidth:0 }}>
-                  <div style={{ fontSize:10, color:t.mu, textTransform:"uppercase", letterSpacing:"0.08em", fontFamily:"monospace", marginBottom:3 }}>{ins.label}</div>
-                  <div style={{ fontSize:15, fontWeight:700, color: ins.positive ? t.p : "#ef4444", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ins.value}</div>
-                  <div style={{ fontSize:11, color:t.di, marginTop:2 }}>{ins.sub}</div>
+              <div key={i} style={{ background:t.cardBg, border:`1px solid ${t.border}`, borderRadius:10, padding:"12px 16px", position:"relative", overflow:"hidden" }}>
+                <div style={{ position:"absolute", top:0, left:0, right:0, height:2, background:`linear-gradient(90deg,transparent,${ins.sparkColor}77,transparent)` }}/>
+                <div style={{ fontSize:10, color:t.mu, textTransform:"uppercase", letterSpacing:"0.08em", fontFamily:"monospace", marginBottom:4 }}>
+                  <span style={{ color: ins.positive ? "#10b981" : "#ef4444", marginRight:5 }}>{ins.icon}</span>{ins.label}
+                </div>
+                <div style={{ fontSize:15, fontWeight:700, color: ins.positive ? t.p : "#ef4444", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom:2 }}>{ins.value}</div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>
+                  <span style={{ fontSize:11, color:t.di }}>{ins.sub}</span>
+                  {ins.spark && <Sparkline data={ins.spark} color={ins.sparkColor}/>}
                 </div>
               </div>
             ))}
@@ -523,7 +553,7 @@ export default function Dashboard() {
         )}
 
         {/* Row 2: charts */}
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
+        <div className="grid-2col">
           <Card title="Daily Revenue" accent="#3b82f6" t={t}>
             {loading
               ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
@@ -537,7 +567,7 @@ export default function Dashboard() {
         </div>
 
         {/* Row 3: countries + tracking */}
-        <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:14, marginBottom:18 }}>
+        <div className="grid-countries">
           <Card title="Shipments by Destination Country" accent="#06b6d4" t={t}>
             {loading
               ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
@@ -572,7 +602,7 @@ export default function Dashboard() {
           {loading
             ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
             : (
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"6px 32px" }}>
+              <div className="grid-customers">
                 {(data.topCustomers||[]).map((c,i) => {
                   const maxRev = Math.max(...(data.topCustomers||[]).map(x=>parseFloat(x.revenue)||0),1);
                   const pct = ((parseFloat(c.revenue)||0)/maxRev)*100;
