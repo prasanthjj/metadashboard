@@ -73,14 +73,14 @@ function makeQueries(start, end) {
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
     tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
-    ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
+    ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
     ipStatusFlow:      `SELECT status, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY status ORDER BY count DESC LIMIT 15`,
     ipDailyTrend:      `SELECT DATE(created_on) as day, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} GROUP BY DATE(created_on) ORDER BY day ASC`,
     ipMailType:        `SELECT i.mail_type_cd, COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE ${odf} AND o.iscancelled=0 GROUP BY i.mail_type_cd ORDER BY count DESC`,
     ipPendingCustoms:  `SELECT COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE i.customs_query_response IS NOT NULL AND JSON_LENGTH(i.customs_query_response)>0 AND (i.query_submission_response IS NULL OR JSON_LENGTH(i.query_submission_response)=0) AND o.iscancelled=0`,
     ipOnHold:          `SELECT o.scancode, o.destination_country, DATE(o.created_on) as created, o.status FROM orders o WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND o.iscancelled=0 AND o.status IN ('SHIPMENT_ON_HOLD_AT_ORIGIN_CUSTOMS','SHIPMENT_ON_HOLD_AT_DESTINATION_CUSTOMS') ORDER BY o.created_on DESC LIMIT 100`,
-    ipCountries:       `SELECT destination_country, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
-    ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY count DESC LIMIT 10`,
+    ipCountries:       `SELECT destination_country, COUNT(*) as count, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
+    ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
   };
 }
 
@@ -399,18 +399,29 @@ function Badge({ status }) {
 }
 
 // ── OnHoldList ────────────────────────────────────────────────────────────────
-function OnHoldList({ rows, loading, t }) {
+function OnHoldList({ rows, pendingCustoms, loading, t }) {
   const [page, setPage] = useState(0);
   const PAGE = 10;
   const pages = Math.ceil(rows.length / PAGE);
   const pageRows = rows.slice(page * PAGE, page * PAGE + PAGE);
   return (
-    <Card title={`Shipments On Hold at Customs${rows.length ? ` (${rows.length})` : ""}`} accent="#ef4444" t={t} style={{ marginBottom:14 }}>
+    <Card title={`Customs Hold & Query Status${rows.length ? ` · ${rows.length} on hold` : ""}`} accent="#ef4444" t={t} style={{ marginBottom:14 }}>
       {loading
         ? <div style={{ height:120, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-        : rows.length === 0
-          ? <div style={{ color:t.mu, fontSize:12 }}>No shipments currently on hold</div>
-          : (
+        : (
+          <>
+            {pendingCustoms > 0 && (
+              <div style={{ background:"#ef444415", border:"1px solid #ef444440", borderRadius:8, padding:"10px 14px", marginBottom:14, display:"flex", alignItems:"center", gap:10 }}>
+                <span style={{ fontSize:20, flexShrink:0 }}>⚠</span>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:700, color:"#ef4444" }}>{pendingCustoms} shipment{pendingCustoms!==1?"s":""} — customs query response pending submission</div>
+                  <div style={{ fontSize:11, color:t.mu, marginTop:1 }}>Customs query received but query submission response not yet sent. Action required.</div>
+                </div>
+              </div>
+            )}
+            {rows.length === 0
+              ? <div style={{ color:t.mu, fontSize:12 }}>No shipments currently on hold at customs</div>
+              : (
             <>
               <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
@@ -451,6 +462,8 @@ function OnHoldList({ rows, loading, t }) {
               )}
             </>
           )}
+          </>
+        )}
     </Card>
   );
 }
@@ -892,23 +905,14 @@ export default function Dashboard() {
         return (
           <>
             {/* IndiaPost KPIs */}
-            <div className="grid-kpi" style={{ gridTemplateColumns:"repeat(4,1fr)" }}>
+            {/* KPIs — 5 cards including revenue */}
+            <div className="grid-kpi">
               <KPICard label="Total Shipments" loading={loading} value={fmt.number(ipk.total)} sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ipSpark} color="#ef4444" t={t}/>
               <KPICard label="Active" loading={loading} value={fmt.number(ipk.active)} sub="Non-cancelled" sparkData={ipSpark} color="#10b981" t={t}/>
-              <KPICard label="Delivered" loading={loading} value={fmt.number(ipk.delivered)} sub={ipk.active > 0 ? `${(ipk.delivered/ipk.active*100).toFixed(1)}% delivery rate` : ""} color="#3b82f6" t={t}/>
-              <KPICard label="Cancelled" loading={loading} value={fmt.number(ipk.cancelled)} sub={ipk.total > 0 ? `${(ipk.cancelled/ipk.total*100).toFixed(1)}% of total` : ""} color="#6b7280" t={t}/>
+              <KPICard label="Delivered" loading={loading} value={fmt.number(ipk.delivered)} sub={ipk.active > 0 ? `${(parseFloat(ipk.delivered)/parseFloat(ipk.active)*100).toFixed(1)}% delivery rate` : ""} color="#3b82f6" t={t}/>
+              <KPICard label="Revenue" loading={loading} value={fmt.currency(ipk.revenue)} sub="IndiaPost shipments" color="#8b5cf6" t={t}/>
+              <KPICard label="Cancelled" loading={loading} value={fmt.number(ipk.cancelled)} sub={ipk.total > 0 ? `${(parseFloat(ipk.cancelled)/parseFloat(ipk.total)*100).toFixed(1)}% of total` : ""} color="#6b7280" t={t}/>
             </div>
-
-            {/* Customs alert */}
-            {!loading && pendingCustoms > 0 && (
-              <div style={{ background:"#ef444418", border:"1px solid #ef444455", borderRadius:10, padding:"14px 20px", marginBottom:14, display:"flex", alignItems:"center", gap:14 }}>
-                <div style={{ width:36, height:36, borderRadius:8, background:"#ef444433", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>⚠</div>
-                <div>
-                  <div style={{ fontSize:14, fontWeight:700, color:"#ef4444" }}>{pendingCustoms} shipment{pendingCustoms!==1?"s":""} held at customs — query response pending</div>
-                  <div style={{ fontSize:11, color:t.mu, marginTop:2 }}>Customs query received but query submission response not yet sent. Action required.</div>
-                </div>
-              </div>
-            )}
 
             {/* Daily trend + mail type */}
             <div className="grid-2col">
@@ -955,20 +959,32 @@ export default function Dashboard() {
                   })()}
             </Card>
 
-            {/* On-hold shipments list */}
-            <OnHoldList rows={data.ipOnHold||[]} loading={loading} t={t}/>
+            {/* Customs hold — banner + list in one card */}
+            <OnHoldList rows={data.ipOnHold||[]} pendingCustoms={pendingCustoms} loading={loading} t={t}/>
 
-            {/* Country + customer charts */}
+            {/* Country + customer — shipments and revenue */}
             <div className="grid-2col">
-              <Card title="Shipments by Destination Country" accent="#06b6d4" t={t}>
+              <Card title="Shipments by Country" accent="#06b6d4" t={t}>
                 {loading
                   ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
                   : <HorizontalBar data={(data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)}))} labelKey="label" valueKey="count" color="#06b6d4" maxItems={12} t={t}/>}
               </Card>
+              <Card title="Revenue by Country" accent="#06b6d4" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <HorizontalBar data={(data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)})).sort((a,b)=>(parseFloat(b.revenue)||0)-(parseFloat(a.revenue)||0))} labelKey="label" valueKey="revenue" color="#8b5cf6" fmtVal={fmt.currency} maxItems={12} t={t}/>}
+              </Card>
+            </div>
+            <div className="grid-2col">
               <Card title="Top Customers by Shipments" accent="#f59e0b" t={t}>
                 {loading
                   ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
                   : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="count" color="#f59e0b" maxItems={10} t={t}/>}
+              </Card>
+              <Card title="Top Customers by Revenue" accent="#f59e0b" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="revenue" color="#f97316" fmtVal={fmt.currency} maxItems={10} t={t}/>}
               </Card>
             </div>
 
