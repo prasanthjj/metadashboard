@@ -385,6 +385,61 @@ export default function Dashboard() {
 
   const countriesData = (data.topCountries||[]).map(r => ({ ...r, label: countryName(r.destination_country) }));
 
+  // ── Insights ────────────────────────────────────────────────────────────────
+  const insights = (() => {
+    if (loading || !data.kpis) return [];
+    const rev  = data.dailyRevenue || [];
+    const list = [];
+
+    // Revenue trend: first half vs second half
+    if (rev.length >= 4) {
+      const mid  = Math.floor(rev.length / 2);
+      const fh   = rev.slice(0, mid).reduce((s,d) => s + (parseFloat(d.revenue)||0), 0);
+      const sh   = rev.slice(mid).reduce((s,d) => s + (parseFloat(d.revenue)||0), 0);
+      const pct  = fh > 0 ? ((sh - fh) / fh * 100) : null;
+      if (pct !== null) list.push({
+        icon: pct >= 0 ? "▲" : "▼", positive: pct >= 0,
+        label: "Revenue Trend",
+        value: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`,
+        sub: `second half vs first half`,
+      });
+    }
+
+    // Peak revenue day
+    if (rev.length) {
+      const peak = rev.reduce((b,d) => (parseFloat(d.revenue)||0) > (parseFloat(b.revenue)||0) ? d : b, rev[0]);
+      list.push({ icon: "◆", positive: true, label: "Peak Day", value: fmt.currency(peak.revenue), sub: fmt.date(peak.day) });
+    }
+
+    // Top destination
+    const ctries = data.topCountries || [];
+    if (ctries.length) {
+      const total = ctries.reduce((s,c) => s + (parseFloat(c.count)||0), 0);
+      const top   = ctries[0];
+      const pct   = total > 0 ? ((parseFloat(top.count)/total)*100).toFixed(0) : 0;
+      list.push({ icon: "◉", positive: true, label: "Top Market", value: countryName(top.destination_country), sub: `${pct}% of shipments` });
+    }
+
+    // Top customer revenue share
+    const custs = data.topCustomers || [];
+    if (custs.length && parseFloat(kpis.total_revenue) > 0) {
+      const top  = custs[0];
+      const pct  = ((parseFloat(top.revenue)||0) / parseFloat(kpis.total_revenue) * 100).toFixed(1);
+      const name = top.customer_name?.split(" ").slice(0,2).join(" ") || "—";
+      list.push({ icon: "★", positive: true, label: "Top Customer", value: name, sub: `${pct}% of revenue` });
+    }
+
+    // Daily averages
+    if (rev.length && kpis.total_orders) {
+      const days    = rev.length;
+      const avgShip = Math.round(parseFloat(kpis.total_orders) / days);
+      const avgRev  = parseFloat(kpis.total_revenue) / days;
+      list.push({ icon: "≈", positive: true, label: "Daily Average", value: `${fmt.number(avgShip)} ships`, sub: `${fmt.currency(avgRev)} revenue/day` });
+    }
+
+    return list;
+  })();
+
   return (
     <div style={{ minHeight:"100vh", background:t.bg, fontFamily:"'DM Sans',system-ui,sans-serif", color:t.s, fontSize:14 }}>
       <style>{`
@@ -444,12 +499,28 @@ export default function Dashboard() {
       <div style={{ padding:"20px 28px", maxWidth:1400, margin:"0 auto" }} className="fade">
 
         {/* KPIs */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:18 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom: insights.length ? 14 : 18 }}>
           <KPICard label="Total Revenue"    loading={loading} value={fmt.currency(kpis.total_revenue)}   sub={`${dateRange.start} → ${dateRange.end}`} sparkData={revSpark} color="#3b82f6" t={t}/>
           <KPICard label="Total Shipments"  loading={loading} value={fmt.number(kpis.total_orders)}      sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ordSpark} color="#10b981" t={t}/>
           <KPICard label="Avg Shipment Value" loading={loading} value={fmt.currency(kpis.avg_order_value)} sub="Per shipment" color="#f59e0b" t={t}/>
           <KPICard label="Unique Customers" loading={loading} value={fmt.number(kpis.unique_customers)}  sub="Active shippers" color="#8b5cf6" t={t}/>
         </div>
+
+        {/* Insights */}
+        {insights.length > 0 && (
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(${insights.length},1fr)`, gap:10, marginBottom:18 }}>
+            {insights.map((ins, i) => (
+              <div key={i} style={{ background:t.cardBg, border:`1px solid ${t.border}`, borderRadius:10, padding:"12px 16px", display:"flex", gap:12, alignItems:"flex-start" }}>
+                <span style={{ fontSize:16, color: ins.positive ? "#10b981" : "#ef4444", lineHeight:1, marginTop:2, flexShrink:0 }}>{ins.icon}</span>
+                <div style={{ minWidth:0 }}>
+                  <div style={{ fontSize:10, color:t.mu, textTransform:"uppercase", letterSpacing:"0.08em", fontFamily:"monospace", marginBottom:3 }}>{ins.label}</div>
+                  <div style={{ fontSize:15, fontWeight:700, color: ins.positive ? t.p : "#ef4444", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ins.value}</div>
+                  <div style={{ fontSize:11, color:t.di, marginTop:2 }}>{ins.sub}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Row 2: charts */}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
