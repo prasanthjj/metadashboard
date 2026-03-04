@@ -351,7 +351,7 @@ export default function Dashboard() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [countdown,   setCountdown]   = useState(REFRESH_INTERVAL);
   const [dateRange,   setDateRange]   = useState(defaultRange);
-  const [themeKey,    setThemeKey]    = useState("void");
+  const [themeKey,    setThemeKey]    = useState(() => THEME_KEYS.includes(localStorage.getItem("theme")) ? localStorage.getItem("theme") : "void");
   const t = THEMES[themeKey];
 
   const fetchAll = useCallback(async () => {
@@ -414,7 +414,7 @@ export default function Dashboard() {
         {/* Theme dots */}
         <div style={{ display:"flex", alignItems:"center", gap:5 }}>
           {THEME_KEYS.map(key => (
-            <button key={key} title={THEMES[key].label} onClick={() => setThemeKey(key)}
+            <button key={key} title={THEMES[key].label} onClick={() => { setThemeKey(key); localStorage.setItem("theme", key); }}
               style={{
                 width:20, height:20, borderRadius:"50%",
                 background: THEMES[key].swatch,
