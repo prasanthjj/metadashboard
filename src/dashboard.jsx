@@ -68,7 +68,6 @@ function makeQueries(start, end) {
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
-    poePerformance:    `SELECT pointofentry,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND pointofentry IS NOT NULL AND pointofentry!='' GROUP BY pointofentry ORDER BY total DESC LIMIT 12`,
   };
 }
 
@@ -666,7 +665,7 @@ export default function Dashboard() {
         </div>
 
         {/* Row 5: LM carrier efficiency */}
-        <Card title="LM Carrier Delivery Performance" accent="#10b981" t={t} style={{ marginBottom:14 }}>
+        <Card title="LM Carrier Delivery Performance  ·  Delivery rate = % of shipments in date range already delivered  ·  TAT = pickup→delivery (delivered only)" accent="#10b981" t={t} style={{ marginBottom:14 }}>
           {loading
             ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
             : (() => {
@@ -706,34 +705,6 @@ export default function Dashboard() {
                         })}
                       </tbody>
                     </table>
-                  </div>
-                );
-              })()}
-        </Card>
-
-        {/* Row 6: POE */}
-        <Card title="Point of Entry Performance" accent="#06b6d4" t={t} style={{ marginBottom:14 }}>
-          {loading
-            ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-            : (() => {
-                const rows = data.poePerformance||[];
-                if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
-                return (
-                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                    {rows.map((r,i) => {
-                      const rate = parseFloat(r.delivery_rate)||0;
-                      const rateColor = rate>=80?"#10b981":rate>=50?"#f59e0b":"#ef4444";
-                      return (
-                        <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                          <span style={{ fontSize:11, color:t.s, width:160, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.pointofentry}</span>
-                          <div style={{ flex:1, height:5, background:t.sk, borderRadius:3, overflow:"hidden" }}>
-                            <div style={{ width:`${rate}%`, height:"100%", background:rateColor, borderRadius:3 }}/>
-                          </div>
-                          <span style={{ fontSize:11, fontFamily:"monospace", color:rateColor, width:36, textAlign:"right", flexShrink:0 }}>{rate}%</span>
-                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", width:80, textAlign:"right", flexShrink:0 }}>{parseInt(r.delivered||0).toLocaleString("en-IN")} / {parseInt(r.total||0).toLocaleString("en-IN")}</span>
-                        </div>
-                      );
-                    })}
                   </div>
                 );
               })()}
