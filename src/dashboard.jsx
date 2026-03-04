@@ -5,12 +5,12 @@ const DB_ID = 2;
 const REFRESH_INTERVAL = 30000;
 
 const QUERIES = {
-  kpis: `SELECT COUNT(*) as total_orders, SUM(totalamount) as total_revenue, AVG(totalamount) as avg_order_value, COUNT(DISTINCT customerid) as unique_customers FROM orders WHERE createdat >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE createdat >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC LIMIT 10`,
-  dailyRevenue: `SELECT DATE(createdat) as day, COUNT(*) as orders, SUM(totalamount) as revenue FROM orders WHERE createdat >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(createdat) ORDER BY day ASC`,
-  recentOrders: `SELECT o.id, o.createdat, o.totalamount, o.status, COALESCE(c.name, c.email, CONCAT('Customer #', o.customerid)) as customer_name FROM orders o LEFT JOIN customers c ON o.customerid = c.id ORDER BY o.createdat DESC LIMIT 8`,
-  topProducts: `SELECT p.name as product_name, SUM(oli.quantity * oli.unitprice) as revenue FROM orderlineitems oli JOIN products p ON oli.productid = p.id WHERE oli.createdat >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.id, p.name ORDER BY revenue DESC LIMIT 6`,
-  trackingStatus: `SELECT status, COUNT(*) as count FROM ordertracking WHERE createdat >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC`,
+  kpis: `SELECT COUNT(*) as total_orders, SUM(total_amount) as total_revenue, AVG(total_amount) as avg_order_value, COUNT(DISTINCT customer_id) as unique_customers FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC LIMIT 10`,
+  dailyRevenue: `SELECT DATE(created_at) as day, COUNT(*) as orders, SUM(total_amount) as revenue FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY day ASC`,
+  recentOrders: `SELECT o.id, o.created_at, o.total_amount, o.status, COALESCE(c.name, c.email, CONCAT('Customer #', o.customer_id)) as customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.id ORDER BY o.created_at DESC LIMIT 8`,
+  topProducts: `SELECT p.name as product_name, SUM(oli.quantity * oli.unit_price) as revenue FROM orderlineitems oli JOIN products p ON oli.product_id = p.id WHERE oli.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.id, p.name ORDER BY revenue DESC LIMIT 6`,
+  trackingStatus: `SELECT status, COUNT(*) as count FROM ordertracking WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC`,
 };
 
 async function runQuery(sql) {
@@ -218,9 +218,9 @@ export default function Dashboard() {
                   {(data.recentOrders || []).map((o, i) => (
                     <tr key={i} className="rh" style={{ borderTop: "1px solid #1f2937" }}>
                       <td style={{ padding: "7px 0", fontSize: 12, color: "#6366f1", fontFamily: "monospace" }}>#{o.id}</td>
-                      <td style={{ padding: "7px 8px", fontSize: 11, color: "#9ca3af", fontFamily: "monospace" }}>{fmt.datetime(o.createdat)}</td>
+                      <td style={{ padding: "7px 8px", fontSize: 11, color: "#9ca3af", fontFamily: "monospace" }}>{fmt.datetime(o.created_at)}</td>
                       <td style={{ padding: "7px 8px", fontSize: 12, color: "#d1d5db", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.customer_name || "—"}</td>
-                      <td style={{ padding: "7px 8px", fontSize: 12, color: "#f9fafb", fontFamily: "monospace", fontWeight: 500 }}>{fmt.currency(o.totalamount)}</td>
+                      <td style={{ padding: "7px 8px", fontSize: 12, color: "#f9fafb", fontFamily: "monospace", fontWeight: 500 }}>{fmt.currency(o.total_amount)}</td>
                       <td style={{ padding: "7px 0" }}><Badge status={o.status} /></td>
                     </tr>
                   ))}
