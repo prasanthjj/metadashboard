@@ -8,9 +8,6 @@ const REFRESH_INTERVAL = 10800; // seconds
 const SC = { XL:"Lite", AN:"Commercial", AP:"Premium", AE:"XPress", IP:"ITPS",  IE:"EMS" };
 const serviceName = s => SC[s] || s || "Unknown";
 
-// ── Node / carrier names ───────────────────────────────────────────────────────
-const NC = { LMGP:"LM Gateway", DELDHUB:"Delhi Hub", JPRPC1:"Jaipur PC", DELPC1:"Delhi PC", SURPC1:"Surat PC", RRKPC1:"Roorkee PC", MUMPC1:"Mumbai PC", GGPCN1:"Gurgaon PC", INDIAPOST:"India Post", REG_RV_LOGISTICS:"RV Logistics", CUSTOMER_LOCATION:"Delivered" };
-const nodeName = n => { if (NC[n]) return NC[n]; if (n?.startsWith("PPNZIPYPOST_")) return `Zipypost Z${n.split("_")[2]}`; return n || "Unknown"; };
 
 // ── Country codes ─────────────────────────────────────────────────────────────
 const CC = { US:"United States",GB:"United Kingdom",AU:"Australia",CA:"Canada",DE:"Germany",FR:"France",IT:"Italy",CH:"Switzerland",JP:"Japan",ES:"Spain",NL:"Netherlands",NZ:"New Zealand",MX:"Mexico",AT:"Austria",SE:"Sweden",SG:"Singapore",AE:"UAE",HK:"Hong Kong",BE:"Belgium",DK:"Denmark",FI:"Finland",NO:"Norway",PT:"Portugal",IE:"Ireland",PL:"Poland",ZA:"South Africa",BR:"Brazil",IN:"India",CN:"China",KR:"South Korea",TH:"Thailand",MY:"Malaysia",PH:"Philippines" };
@@ -70,8 +67,8 @@ function makeQueries(start, end) {
     topCustomers:      `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
-    carrierDelivery:   `SELECT oli.to_node as carrier,COUNT(*) as total,SUM(CASE WHEN oli.current_node='CUSTOMER_LOCATION' THEN 1 ELSE 0 END) as delivered,SUM(CASE WHEN oli.ispickedup=1 THEN 1 ELSE 0 END) as picked_up,ROUND(SUM(CASE WHEN oli.current_node='CUSTOMER_LOCATION' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate FROM orderlineitems oli INNER JOIN orders o ON oli.orderid=o.id WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND oli.to_node IS NOT NULL AND oli.to_node!='' GROUP BY oli.to_node ORDER BY total DESC LIMIT 12`,
-    nodeFlow:          `SELECT oli.current_node as node,COUNT(*) as count FROM orderlineitems oli INNER JOIN orders o ON oli.orderid=o.id WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND oli.current_node IS NOT NULL AND oli.current_node!='' GROUP BY oli.current_node ORDER BY count DESC LIMIT 12`,
+    carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
+    poePerformance:    `SELECT pointofentry,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND pointofentry IS NOT NULL AND pointofentry!='' GROUP BY pointofentry ORDER BY total DESC LIMIT 12`,
   };
 }
 
@@ -668,42 +665,79 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Row 5: LM carrier + node flow */}
-        <div className="grid-2col">
-          <Card title="LM Carrier Delivery Rate" accent="#10b981" t={t}>
-            {loading
-              ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : (() => {
-                  const rows = (data.carrierDelivery||[]).map(r=>({...r, label:nodeName(r.carrier)}));
-                  if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
-                  return (
-                    <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
-                      {rows.map((r,i) => {
-                        const rate = parseFloat(r.delivery_rate)||0;
-                        const rateColor = rate>=80?"#10b981":rate>=50?"#f59e0b":"#ef4444";
-                        return (
-                          <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                            <span style={{ fontSize:11, color:t.s, width:90, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.label}</span>
-                            <div style={{ flex:1, height:6, background:t.sk, borderRadius:3, overflow:"hidden" }}>
-                              <div style={{ width:`${rate}%`, height:"100%", background:rateColor, borderRadius:3, transition:"width 0.4s" }}/>
-                            </div>
-                            <span style={{ fontSize:11, fontFamily:"monospace", color:rateColor, width:36, textAlign:"right", flexShrink:0 }}>{rate}%</span>
-                            <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", width:44, textAlign:"right", flexShrink:0 }}>{parseInt(r.delivered).toLocaleString("en-IN")}/{parseInt(r.total).toLocaleString("en-IN")}</span>
+        {/* Row 5: LM carrier efficiency */}
+        <Card title="LM Carrier Delivery Performance" accent="#10b981" t={t} style={{ marginBottom:14 }}>
+          {loading
+            ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+            : (() => {
+                const rows = data.carrierPerformance||[];
+                if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                return (
+                  <div style={{ overflowX:"auto" }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                      <thead>
+                        <tr>
+                          {["Carrier","Method","Delivery Rate","TAT (days)","Delivered","Total"].map(h => (
+                            <th key={h} style={{ textAlign:h==="Delivery Rate"?"left":"right", color:t.mu, fontWeight:500, padding:"4px 8px", fontFamily:"monospace", fontSize:10, letterSpacing:"0.05em", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r,i) => {
+                          const rate = parseFloat(r.delivery_rate)||0;
+                          const rateColor = rate>=80?"#10b981":rate>=50?"#f59e0b":"#ef4444";
+                          return (
+                            <tr key={i} style={{ borderBottom:`1px solid ${t.border}40` }}>
+                              <td style={{ padding:"7px 8px", color:t.p, fontWeight:600 }}>{r.lmcarrier}</td>
+                              <td style={{ padding:"7px 8px", color:t.t3, textAlign:"right" }}>{r.lmshippingmethod}</td>
+                              <td style={{ padding:"7px 8px", minWidth:140 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                  <div style={{ flex:1, height:5, background:t.sk, borderRadius:3, overflow:"hidden" }}>
+                                    <div style={{ width:`${rate}%`, height:"100%", background:rateColor, borderRadius:3 }}/>
+                                  </div>
+                                  <span style={{ fontFamily:"monospace", color:rateColor, width:36, textAlign:"right", flexShrink:0 }}>{rate}%</span>
+                                </div>
+                              </td>
+                              <td style={{ padding:"7px 8px", textAlign:"right", color:t.s, fontFamily:"monospace" }}>{r.avg_tat != null ? `${r.avg_tat}d` : "—"}</td>
+                              <td style={{ padding:"7px 8px", textAlign:"right", color:"#10b981", fontFamily:"monospace" }}>{parseInt(r.delivered||0).toLocaleString("en-IN")}</td>
+                              <td style={{ padding:"7px 8px", textAlign:"right", color:t.mu, fontFamily:"monospace" }}>{parseInt(r.total||0).toLocaleString("en-IN")}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+        </Card>
+
+        {/* Row 6: POE */}
+        <Card title="Point of Entry Performance" accent="#06b6d4" t={t} style={{ marginBottom:14 }}>
+          {loading
+            ? <div style={{ height:160, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+            : (() => {
+                const rows = data.poePerformance||[];
+                if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                return (
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {rows.map((r,i) => {
+                      const rate = parseFloat(r.delivery_rate)||0;
+                      const rateColor = rate>=80?"#10b981":rate>=50?"#f59e0b":"#ef4444";
+                      return (
+                        <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ fontSize:11, color:t.s, width:160, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.pointofentry}</span>
+                          <div style={{ flex:1, height:5, background:t.sk, borderRadius:3, overflow:"hidden" }}>
+                            <div style={{ width:`${rate}%`, height:"100%", background:rateColor, borderRadius:3 }}/>
                           </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-          </Card>
-          <Card title="Shipment Pipeline (Point of Entry)" accent="#06b6d4" t={t}>
-            {loading
-              ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-              : <DonutChart
-                  data={(data.nodeFlow||[]).map(r=>({...r, label:nodeName(r.node)}))}
-                  labelKey="label" valueKey="count" t={t}/>}
-          </Card>
-        </div>
+                          <span style={{ fontSize:11, fontFamily:"monospace", color:rateColor, width:36, textAlign:"right", flexShrink:0 }}>{rate}%</span>
+                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", width:80, textAlign:"right", flexShrink:0 }}>{parseInt(r.delivered||0).toLocaleString("en-IN")} / {parseInt(r.total||0).toLocaleString("en-IN")}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+        </Card>
 
         {/* Row 6: top customers */}
         <Card title="Top Customers by Revenue" accent="#f59e0b" t={t}>
