@@ -68,6 +68,7 @@ function makeQueries(start, end) {
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
+    tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
   };
 }
 
@@ -710,7 +711,62 @@ export default function Dashboard() {
               })()}
         </Card>
 
-        {/* Row 6: top customers */}
+        {/* Row 6: TAT distribution */}
+        <Card title="Overall TAT Distribution (Pickup → Delivered)" accent="#8b5cf6" t={t} style={{ marginBottom:14 }}>
+          {loading
+            ? <div style={{ height:120, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+            : (() => {
+                const rows = data.tatDistribution||[];
+                if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data — try a wider date range</div>;
+                const total = rows.reduce((s,r) => s+(parseFloat(r.shipments)||0), 0);
+                const avgTat = data.carrierPerformance
+                  ? (() => { const all = (data.carrierPerformance||[]).filter(r=>r.avg_tat!=null); const wsum = all.reduce((s,r)=>s+(parseFloat(r.avg_tat)||0)*(parseFloat(r.delivered)||0),0); const wd = all.reduce((s,r)=>s+(parseFloat(r.delivered)||0),0); return wd>0?Math.round(wsum/wd*10)/10:null; })()
+                  : null;
+                const within14 = rows.filter(r=>r.sort_order<=2).reduce((s,r)=>s+(parseFloat(r.shipments)||0),0);
+                const sla = total>0 ? (within14/total*100).toFixed(1) : null;
+                const max = Math.max(...rows.map(r=>parseFloat(r.shipments)||0), 1);
+                const COLORS = { "1–7d":"#10b981", "8–14d":"#3b82f6", "15–21d":"#f59e0b", "22–28d":"#f97316", "29+d":"#ef4444" };
+                return (
+                  <div>
+                    <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
+                      {avgTat != null && <div style={{ background:t.sk, borderRadius:8, padding:"8px 16px", textAlign:"center" }}>
+                        <div style={{ fontSize:18, fontWeight:700, color:t.p, fontFamily:"monospace" }}>{avgTat}d</div>
+                        <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Weighted avg TAT</div>
+                      </div>}
+                      {sla != null && <div style={{ background:t.sk, borderRadius:8, padding:"8px 16px", textAlign:"center" }}>
+                        <div style={{ fontSize:18, fontWeight:700, color: parseFloat(sla)>=80?"#10b981":"#f59e0b", fontFamily:"monospace" }}>{sla}%</div>
+                        <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Delivered ≤14 days</div>
+                      </div>}
+                      <div style={{ background:t.sk, borderRadius:8, padding:"8px 16px", textAlign:"center" }}>
+                        <div style={{ fontSize:18, fontWeight:700, color:t.p, fontFamily:"monospace" }}>{total.toLocaleString("en-IN")}</div>
+                        <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Total delivered</div>
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:100 }}>
+                      {rows.map((r,i) => {
+                        const val = parseFloat(r.shipments)||0;
+                        const pct = (val/max)*100;
+                        const color = COLORS[r.bucket]||"#8b5cf6";
+                        return (
+                          <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", height:"100%" }}>
+                            <div style={{ flex:1, width:"100%", display:"flex", alignItems:"flex-end" }}>
+                              <div style={{ width:"100%", background:`${color}33`, borderRadius:"4px 4px 0 0", height:`${pct}%`, minHeight:val>0?4:0, position:"relative" }}>
+                                <div style={{ position:"absolute", bottom:0, left:0, right:0, height:3, background:color, borderRadius:2 }}/>
+                                <div style={{ position:"absolute", top:-18, left:"50%", transform:"translateX(-50%)", fontSize:10, color:t.s, fontFamily:"monospace", whiteSpace:"nowrap" }}>{val.toLocaleString("en-IN")}</div>
+                              </div>
+                            </div>
+                            <div style={{ fontSize:11, color:color, fontFamily:"monospace", marginTop:6, fontWeight:600 }}>{r.bucket}</div>
+                            <div style={{ fontSize:9, color:t.mu, fontFamily:"monospace" }}>{total>0?(val/total*100).toFixed(0):"0"}%</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+        </Card>
+
+        {/* Row 7: top customers */}
         <Card title="Top Customers by Revenue" accent="#f59e0b" t={t}>
           {loading
             ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
