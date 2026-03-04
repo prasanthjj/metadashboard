@@ -213,22 +213,39 @@ function Sparkline({ data, color="#3b82f6" }) {
 }
 
 // ── BarChart ──────────────────────────────────────────────────────────────────
-function BarChart({ data, xKey, yKey, color="#3b82f6", height=130, t }) {
+function BarChart({ data, xKey, yKey, fmtTooltip, color="#3b82f6", height=130, t }) {
+  const [tip, setTip] = useState(null); // { i, x, y }
   if (!data?.length) return <div style={{ height, display:"flex", alignItems:"center", justifyContent:"center", color:t.mu, fontSize:12 }}>No data</div>;
   const vals = data.map(d => parseFloat(d[yKey]) || 0);
   const max = Math.max(...vals, 1);
   return (
-    <div style={{ display:"flex", alignItems:"flex-end", gap:2, height, width:"100%" }}>
-      {data.map((d,i) => (
-        <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", height:"100%" }}>
-          <div style={{ flex:1, width:"100%", display:"flex", alignItems:"flex-end" }}>
-            <div style={{ width:"100%", background:`${color}22`, borderRadius:"2px 2px 0 0", height:`${(vals[i]/max)*100}%`, minHeight:vals[i]>0?2:0, position:"relative" }}>
-              <div style={{ position:"absolute", bottom:0, left:0, right:0, height:2, background:color, borderRadius:1 }}/>
+    <div style={{ position:"relative" }}>
+      <div style={{ display:"flex", alignItems:"flex-end", gap:2, height, width:"100%" }}>
+        {data.map((d,i) => (
+          <div key={i}
+            style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", height:"100%", cursor:"default" }}
+            onMouseEnter={e => setTip({ i, rect: e.currentTarget.getBoundingClientRect() })}
+            onMouseLeave={() => setTip(null)}>
+            <div style={{ flex:1, width:"100%", display:"flex", alignItems:"flex-end" }}>
+              <div style={{ width:"100%", background: tip?.i===i ? `${color}44` : `${color}22`, borderRadius:"2px 2px 0 0", height:`${(vals[i]/max)*100}%`, minHeight:vals[i]>0?2:0, position:"relative", transition:"background 0.1s" }}>
+                <div style={{ position:"absolute", bottom:0, left:0, right:0, height:2, background:color, borderRadius:1 }}/>
+              </div>
             </div>
+            <span style={{ fontSize:8, color:t.di, marginTop:2, writingMode:"vertical-rl", transform:"rotate(180deg)", maxHeight:28, overflow:"hidden" }}>{fmt.date(d[xKey])}</span>
           </div>
-          <span style={{ fontSize:8, color:t.di, marginTop:2, writingMode:"vertical-rl", transform:"rotate(180deg)", maxHeight:28, overflow:"hidden" }}>{fmt.date(d[xKey])}</span>
-        </div>
-      ))}
+        ))}
+      </div>
+      {tip !== null && (() => {
+        const d = data[tip.i];
+        return (
+          <div style={{ position:"fixed", left: tip.rect.left + tip.rect.width/2, top: tip.rect.top - 8, transform:"translate(-50%,-100%)", zIndex:300, pointerEvents:"none",
+            background: t.cardBg, border:`1px solid ${t.border}`, borderRadius:7, padding:"6px 10px", boxShadow:"0 4px 16px #00000044", whiteSpace:"nowrap" }}>
+            <div style={{ fontSize:11, color:t.mu, fontFamily:"monospace", marginBottom:2 }}>{fmt.date(d[xKey])}</div>
+            <div style={{ fontSize:13, fontWeight:700, color:t.p, fontFamily:"monospace" }}>{fmtTooltip ? fmtTooltip(d) : fmt.currency(vals[tip.i])}</div>
+            {d.orders !== undefined && <div style={{ fontSize:10, color:t.t3, fontFamily:"monospace" }}>{fmt.number(d.orders)} shipments</div>}
+          </div>
+        );
+      })()}
     </div>
   );
 }
