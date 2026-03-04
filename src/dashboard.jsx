@@ -944,10 +944,6 @@ export default function Dashboard() {
             )}
         </Card>
 
-        <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
-          <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Production DB · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
-          <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Auto-refresh 3h · metaconnect.up.railway.app</span>
-        </div>
 
       </>}
 
@@ -1095,14 +1091,18 @@ export default function Dashboard() {
                   })()}
             </Card>
 
-            <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
-              <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>IndiaPost · LP% and EY% scancodes · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
-              <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Auto-refresh 3h · metaconnect.up.railway.app</span>
-            </div>
           </>
         );
       })()}
 
+      </div>
+
+      {/* ── Footer ── */}
+      <div style={{ borderTop:`1px solid ${t.border}`, background:t.headerBg, padding:"18px 28px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+        <span style={{ fontSize:11, color:t.mu }}>© 2024 Xindus Trade Networks. All Rights Reserved.</span>
+        <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>
+          {lastRefresh ? `Last updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}
+        </span>
       </div>
     </div>
   );
