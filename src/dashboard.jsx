@@ -5,12 +5,12 @@ const DB_ID = 2;
 const REFRESH_INTERVAL = 30000;
 
 const QUERIES = {
-  kpis: `SELECT COUNT(*) as total_orders, SUM(total_amount) as total_revenue, AVG(total_amount) as avg_order_value, COUNT(DISTINCT customer_id) as unique_customers FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC LIMIT 10`,
-  dailyRevenue: `SELECT DATE(created_at) as day, COUNT(*) as orders, SUM(total_amount) as revenue FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(created_at) ORDER BY day ASC`,
-  recentOrders: `SELECT o.id, o.created_at, o.total_amount, o.status, COALESCE(c.name, c.email, CONCAT('Customer #', o.customer_id)) as customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.id ORDER BY o.created_at DESC LIMIT 8`,
-  topProducts: `SELECT p.name as product_name, SUM(oli.quantity * oli.unit_price) as revenue FROM orderlineitems oli JOIN products p ON oli.product_id = p.id WHERE oli.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.id, p.name ORDER BY revenue DESC LIMIT 6`,
-  trackingStatus: `SELECT status, COUNT(*) as count FROM ordertracking WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC`,
+  kpis: `SELECT COUNT(*) as total_orders, SUM(totalfobvalue) as total_revenue, AVG(totalfobvalue) as avg_order_value, COUNT(DISTINCT customer_id) as unique_customers FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC LIMIT 10`,
+  dailyRevenue: `SELECT DATE(created_on) as day, COUNT(*) as orders, SUM(totalfobvalue) as revenue FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(created_on) ORDER BY day ASC`,
+  recentOrders: `SELECT o.id, o.created_on as created_at, o.totalfobvalue as total_amount, o.status, COALESCE(c.contact_name, c.email, CONCAT('Customer #', o.customer_id)) as customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.id ORDER BY o.created_on DESC LIMIT 8`,
+  topProducts: `SELECT p.product as product_name, SUM(oli.quantity * oli.invoicerate) as revenue FROM orderlineitems oli LEFT JOIN products p ON oli.product = p.id WHERE oli.created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.id, p.product ORDER BY revenue DESC LIMIT 6`,
+  trackingStatus: `SELECT status, COUNT(*) as count FROM ordertracking WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC`,
 };
 
 async function runQuery(sql) {
