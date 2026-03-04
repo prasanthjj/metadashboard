@@ -4,8 +4,5 @@
       "source": "/api/v2/:path*",
       "destination": "https://metaconnect.up.railway.app/:path*"
     }
-  ],
-  "functions": {
-    "middleware.js": { "runtime": "edge" }
-  }
+  ]
 }
