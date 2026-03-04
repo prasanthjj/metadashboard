@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Analytics } from '@vercel/analytics/next';
 
 const PROXY = "/api/v2";
 const DB_ID  = 2;
@@ -1017,31 +1018,71 @@ export default function Dashboard() {
             {/* Customs hold — banner + list in one card */}
             <OnHoldList rows={data.ipOnHold||[]} pendingCustoms={pendingCustoms} loading={loading} t={t}/>
 
-            {/* Country + customer — shipments and revenue */}
-            <div className="grid-2col">
-              <Card title="Shipments by Country" accent="#06b6d4" t={t}>
-                {loading
-                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : <HorizontalBar data={(data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)}))} labelKey="label" valueKey="count" color="#06b6d4" maxItems={12} t={t}/>}
-              </Card>
-              <Card title="Revenue by Country" accent="#06b6d4" t={t}>
-                {loading
-                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : <HorizontalBar data={(data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)})).sort((a,b)=>(parseFloat(b.revenue)||0)-(parseFloat(a.revenue)||0))} labelKey="label" valueKey="revenue" color="#8b5cf6" fmtVal={fmt.currency} maxItems={12} t={t}/>}
-              </Card>
-            </div>
-            <div className="grid-2col">
-              <Card title="Top Customers by Shipments" accent="#f59e0b" t={t}>
-                {loading
-                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="count" color="#f59e0b" maxItems={10} t={t}/>}
-              </Card>
-              <Card title="Top Customers by Revenue" accent="#f59e0b" t={t}>
-                {loading
-                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="revenue" color="#f97316" fmtVal={fmt.currency} maxItems={10} t={t}/>}
-              </Card>
-            </div>
+            {/* Country — shipments + revenue merged */}
+            <Card title="Shipments &amp; Revenue by Country" accent="#06b6d4" t={t} style={{ marginBottom:14 }}>
+              {loading
+                ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                : (() => {
+                    const rows = (data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)}));
+                    if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                    const maxCount = Math.max(...rows.map(r=>parseFloat(r.count)||0), 1);
+                    const maxRev   = Math.max(...rows.map(r=>parseFloat(r.revenue)||0), 1);
+                    return (
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 120px 120px", gap:"0 12px", marginBottom:4 }}>
+                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>Country</span>
+                          <span style={{ fontSize:10, color:"#06b6d4", fontFamily:"monospace", textAlign:"right" }}>Shipments</span>
+                          <span style={{ fontSize:10, color:"#8b5cf6", fontFamily:"monospace", textAlign:"right" }}>Revenue</span>
+                        </div>
+                        {rows.slice(0,12).map((r,i) => (
+                          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 120px 120px", gap:"0 12px", alignItems:"center" }}>
+                            <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.label}</span>
+                            <div style={{ display:"flex", alignItems:"center", gap:5, justifyContent:"flex-end" }}>
+                              <div style={{ width:50, height:4, background:t.sk, borderRadius:2, flexShrink:0 }}>
+                                <div style={{ width:`${(parseFloat(r.count)||0)/maxCount*100}%`, height:"100%", background:"#06b6d499", borderRadius:2 }}/>
+                              </div>
+                              <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", flexShrink:0, width:32, textAlign:"right" }}>{fmt.number(r.count)}</span>
+                            </div>
+                            <span style={{ fontSize:11, color:"#8b5cf6", fontFamily:"monospace", textAlign:"right" }}>{fmt.currency(r.revenue)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+            </Card>
+
+            {/* Customers — shipments + revenue merged */}
+            <Card title="Top Customers by Shipments &amp; Revenue" accent="#f59e0b" t={t} style={{ marginBottom:14 }}>
+              {loading
+                ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                : (() => {
+                    const rows = data.ipCustomers||[];
+                    if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                    const maxCount = Math.max(...rows.map(r=>parseFloat(r.count)||0), 1);
+                    const maxRev   = Math.max(...rows.map(r=>parseFloat(r.revenue)||0), 1);
+                    return (
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 120px 130px", gap:"0 12px", marginBottom:4 }}>
+                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>Customer</span>
+                          <span style={{ fontSize:10, color:"#f59e0b", fontFamily:"monospace", textAlign:"right" }}>Shipments</span>
+                          <span style={{ fontSize:10, color:"#f97316", fontFamily:"monospace", textAlign:"right" }}>Revenue</span>
+                        </div>
+                        {rows.slice(0,10).map((r,i) => (
+                          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 120px 130px", gap:"0 12px", alignItems:"center" }}>
+                            <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</span>
+                            <div style={{ display:"flex", alignItems:"center", gap:5, justifyContent:"flex-end" }}>
+                              <div style={{ width:50, height:4, background:t.sk, borderRadius:2, flexShrink:0 }}>
+                                <div style={{ width:`${(parseFloat(r.count)||0)/maxCount*100}%`, height:"100%", background:"#f59e0b99", borderRadius:2 }}/>
+                              </div>
+                              <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", flexShrink:0, width:32, textAlign:"right" }}>{fmt.number(r.count)}</span>
+                            </div>
+                            <span style={{ fontSize:11, color:"#f97316", fontFamily:"monospace", textAlign:"right" }}>{fmt.currency(r.revenue)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+            </Card>
 
             {/* IP TAT distribution */}
             <Card title="IndiaPost TAT Distribution (Pickup → Delivered)" accent="#8b5cf6" t={t} style={{ marginBottom:14 }}>
