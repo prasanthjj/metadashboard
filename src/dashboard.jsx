@@ -78,6 +78,9 @@ function makeQueries(start, end) {
     ipDailyTrend:      `SELECT DATE(created_on) as day, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} GROUP BY DATE(created_on) ORDER BY day ASC`,
     ipMailType:        `SELECT i.mail_type_cd, COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE ${odf} AND o.iscancelled=0 GROUP BY i.mail_type_cd ORDER BY count DESC`,
     ipPendingCustoms:  `SELECT COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE i.customs_query_response IS NOT NULL AND JSON_LENGTH(i.customs_query_response)>0 AND (i.query_submission_response IS NULL OR JSON_LENGTH(i.query_submission_response)=0) AND o.iscancelled=0`,
+    ipOnHold:          `SELECT o.scancode, o.destination_country, DATE(o.created_on) as created, o.status FROM orders o WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND o.iscancelled=0 AND o.status IN ('SHIPMENT_ON_HOLD_AT_ORIGIN_CUSTOMS','SHIPMENT_ON_HOLD_AT_DESTINATION_CUSTOMS') ORDER BY o.created_on DESC LIMIT 100`,
+    ipCountries:       `SELECT destination_country, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
+    ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY count DESC LIMIT 10`,
   };
 }
 
@@ -393,6 +396,63 @@ function Card({ title, children, accent="#3b82f6", style={}, t }) {
 function Badge({ status }) {
   const c = statusColor(status);
   return <span style={{ fontSize:10, fontWeight:600, padding:"2px 7px", borderRadius:4, background:`${c}18`, color:c, border:`1px solid ${c}33`, textTransform:"uppercase", letterSpacing:"0.06em", fontFamily:"monospace", whiteSpace:"nowrap" }}>{status||"—"}</span>;
+}
+
+// ── OnHoldList ────────────────────────────────────────────────────────────────
+function OnHoldList({ rows, loading, t }) {
+  const [page, setPage] = useState(0);
+  const PAGE = 10;
+  const pages = Math.ceil(rows.length / PAGE);
+  const pageRows = rows.slice(page * PAGE, page * PAGE + PAGE);
+  return (
+    <Card title={`Shipments On Hold at Customs${rows.length ? ` (${rows.length})` : ""}`} accent="#ef4444" t={t} style={{ marginBottom:14 }}>
+      {loading
+        ? <div style={{ height:120, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : rows.length === 0
+          ? <div style={{ color:t.mu, fontSize:12 }}>No shipments currently on hold</div>
+          : (
+            <>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                  <thead>
+                    <tr>{["AWB","Destination","Created","Status"].map(h => (
+                      <th key={h} style={{ textAlign:"left", color:t.mu, fontWeight:500, padding:"4px 8px", fontFamily:"monospace", fontSize:10, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((r,i) => (
+                      <tr key={i} style={{ borderBottom:`1px solid ${t.border}40` }}>
+                        <td style={{ padding:"7px 8px" }}>
+                          <a href={`https://one.xindus.net/erp/ops-shipment-edit.html?awb=${r.scancode}`} target="_blank" rel="noopener noreferrer"
+                            style={{ color:"#3b82f6", fontFamily:"monospace", fontSize:11, textDecoration:"none", fontWeight:600 }}>
+                            {r.scancode} ↗
+                          </a>
+                        </td>
+                        <td style={{ padding:"7px 8px", color:t.s }}>{countryName(r.destination_country)}</td>
+                        <td style={{ padding:"7px 8px", color:t.mu, fontFamily:"monospace" }}>{fmt.date(r.created)}</td>
+                        <td style={{ padding:"7px 8px" }}>
+                          <span style={{ fontSize:10, color:"#ef4444", background:"#ef444415", border:"1px solid #ef444433", borderRadius:4, padding:"2px 6px", fontFamily:"monospace" }}>
+                            {ipStatusLabel(r.status)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {pages > 1 && (
+                <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:10, justifyContent:"flex-end" }}>
+                  <button onClick={() => setPage(p => Math.max(0, p-1))} disabled={page===0}
+                    style={{ padding:"3px 10px", fontSize:11, background:t.sk, border:`1px solid ${t.border}`, borderRadius:5, color:t.t3, cursor:page===0?"default":"pointer", opacity:page===0?0.4:1 }}>‹</button>
+                  <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{page+1} / {pages}</span>
+                  <button onClick={() => setPage(p => Math.min(pages-1, p+1))} disabled={page===pages-1}
+                    style={{ padding:"3px 10px", fontSize:11, background:t.sk, border:`1px solid ${t.border}`, borderRadius:5, color:t.t3, cursor:page===pages-1?"default":"pointer", opacity:page===pages-1?0.4:1 }}>›</button>
+                </div>
+              )}
+            </>
+          )}
+    </Card>
+  );
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -850,12 +910,13 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Daily trend + status flow */}
+            {/* Daily trend + mail type */}
             <div className="grid-2col">
               <Card title="Daily IndiaPost Shipments" accent="#ef4444" t={t}>
                 {loading
                   ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : <BarChart data={data.ipDailyTrend||[]} xKey="day" yKey="shipments" color="#ef4444" height={140} t={t}/>}
+                  : <BarChart data={data.ipDailyTrend||[]} xKey="day" yKey="shipments" color="#ef4444" height={140}
+                      fmtTooltip={d => `${fmt.number(d.shipments)} shipments`} t={t}/>}
               </Card>
               <Card title="Mail Type" accent="#8b5cf6" t={t}>
                 {loading
@@ -893,6 +954,23 @@ export default function Dashboard() {
                     );
                   })()}
             </Card>
+
+            {/* On-hold shipments list */}
+            <OnHoldList rows={data.ipOnHold||[]} loading={loading} t={t}/>
+
+            {/* Country + customer charts */}
+            <div className="grid-2col">
+              <Card title="Shipments by Destination Country" accent="#06b6d4" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <HorizontalBar data={(data.ipCountries||[]).map(r=>({...r,label:countryName(r.destination_country)}))} labelKey="label" valueKey="count" color="#06b6d4" maxItems={12} t={t}/>}
+              </Card>
+              <Card title="Top Customers by Shipments" accent="#f59e0b" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <HorizontalBar data={data.ipCustomers||[]} labelKey="customer_name" valueKey="count" color="#f59e0b" maxItems={10} t={t}/>}
+              </Card>
+            </div>
 
             <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
               <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>IndiaPost · LP% and EY% scancodes · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
