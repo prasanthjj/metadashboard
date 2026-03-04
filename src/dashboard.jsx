@@ -1017,8 +1017,9 @@ export default function Dashboard() {
             {/* Customs hold — banner + list in one card */}
             <OnHoldList rows={data.ipOnHold||[]} pendingCustoms={pendingCustoms} loading={loading} t={t}/>
 
-            {/* Country — shipments + revenue merged */}
-            <Card title="Shipments &amp; Revenue by Country" accent="#06b6d4" t={t} style={{ marginBottom:14 }}>
+            {/* Country + Customers side by side */}
+            <div className="grid-2col">
+            <Card title="Shipments &amp; Revenue by Country" accent="#06b6d4" t={t}>
               {loading
                 ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
                 : (() => {
@@ -1050,8 +1051,7 @@ export default function Dashboard() {
                   })()}
             </Card>
 
-            {/* Customers — shipments + revenue merged */}
-            <Card title="Top Customers by Shipments &amp; Revenue" accent="#f59e0b" t={t} style={{ marginBottom:14 }}>
+            <Card title="Top Customers by Shipments &amp; Revenue" accent="#f59e0b" t={t}>
               {loading
                 ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
                 : (() => {
@@ -1082,6 +1082,7 @@ export default function Dashboard() {
                     );
                   })()}
             </Card>
+            </div>
 
             {/* IP TAT distribution */}
             <Card title="IndiaPost TAT Distribution (Pickup → Delivered)" accent="#8b5cf6" t={t} style={{ marginBottom:14 }}>
