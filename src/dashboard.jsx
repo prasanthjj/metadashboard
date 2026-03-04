@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Analytics } from '@vercel/analytics/next';
 
 const PROXY = "/api/v2";
 const DB_ID  = 2;
