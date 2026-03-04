@@ -52,6 +52,10 @@ const defaultRange = () => {
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAY_NAMES   = ["Su","Mo","Tu","We","Th","Fr","Sa"];
 
+// ── IndiaPost status labels ────────────────────────────────────────────────────
+const IP_STATUS = { SHIPMENT_CREATED:"Created", SHIPMENT_READY_FOR_PICKUP:"Ready for Pickup", SHIPMENT_PICKUP_REATTEMPT:"Pickup Reattempt", SHIPMENT_ACCEPTED_AT_PICKUP_LOCATION:"Accepted at Pickup", SHIPMENT_RECIEVED_AT_HUB:"Received at Hub", SHIPMENT_ACCEPTED_AT_HUB:"Accepted at Hub", SHIPMENT_CONNECTED_TO_HUB:"Connected to Hub", SHIPMENT_AT_ORIGIN_CUSTOMS:"At Origin Customs", SHIPMENT_ON_HOLD_AT_ORIGIN_CUSTOMS:"On Hold at Customs", SHIPMENT_INJECTED_TO_INDIA_POST:"Injected to IndiaPost", SHIPMENT_INTRANSIT:"In Transit", INTRANSIT_001:"In Transit", INTRANSIT_002:"In Transit 2", INTRANSIT_003:"In Transit 3", SHIPMENT_CONNECTED_TO_GATEWAY_COUNTRY:"At Gateway Country", SHIPMENT_ARRIVED_AT_DESTINATION_COUNTRY:"Arrived Destination", SHIPMENT_CLEARED_AT_DESTINATION_CUSTOMS:"Cleared Customs", SHIPMENT_ON_HOLD_AT_DESTINATION_CUSTOMS:"On Hold Dest Customs", SHIPMENT_INTRANSIT_TO_LAST_MILE:"In Transit to LM", SHIPMENT_RECIEVED_AT_LAST_MILE_HUB:"At LM Hub", SHIPMENT_OUT_FOR_DELIVERY:"Out for Delivery", SHIPMENT_DELIVERY_ATTEMPTED:"Delivery Attempted", SHIPMENT_READY_FOR_CUSTOMER_COLLECTION:"Ready for Collection", SHIPMENT_DELIVERED:"Delivered", SHIPMENT_CANCELLED:"Cancelled" };
+const ipStatusLabel = s => IP_STATUS[s] || (s?.replace(/^SHIPMENT_/,"").replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())) || "Unknown";
+
 // ── Queries ───────────────────────────────────────────────────────────────────
 const REV  = `CASE WHEN iscancelled=1 THEN 0 ELSE CASE WHEN final_charge_updated=0 THEN advanceamount ELSE totalamount END END`;
 const ACTF = `all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION')`;
@@ -69,6 +73,11 @@ function makeQueries(start, end) {
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
     tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
+    ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
+    ipStatusFlow:      `SELECT status, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY status ORDER BY count DESC LIMIT 15`,
+    ipDailyTrend:      `SELECT DATE(created_on) as day, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} GROUP BY DATE(created_on) ORDER BY day ASC`,
+    ipMailType:        `SELECT i.mail_type_cd, COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE ${odf} AND o.iscancelled=0 GROUP BY i.mail_type_cd ORDER BY count DESC`,
+    ipPendingCustoms:  `SELECT COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE i.customs_query_response IS NOT NULL AND JSON_LENGTH(i.customs_query_response)>0 AND (i.query_submission_response IS NULL OR JSON_LENGTH(i.query_submission_response)=0) AND o.iscancelled=0`,
   };
 }
 
@@ -395,6 +404,7 @@ export default function Dashboard() {
   const [countdown,   setCountdown]   = useState(REFRESH_INTERVAL);
   const [dateRange,   setDateRange]   = useState(defaultRange);
   const [themeKey,    setThemeKey]    = useState(() => THEME_KEYS.includes(localStorage.getItem("theme")) ? localStorage.getItem("theme") : "void");
+  const [activeTab,   setActiveTab]   = useState("main");
   const t = THEMES[themeKey];
 
   const fetchAll = useCallback(async () => {
@@ -568,7 +578,18 @@ export default function Dashboard() {
       </div>
 
       {/* ── Content ── */}
+      {/* ── Tab bar ── */}
+      <div style={{ display:"flex", gap:0, padding:"0 24px", background:t.headerBg, borderBottom:`1px solid ${t.border}`, position:"sticky", top:53, zIndex:9 }}>
+        {[["main","Operations"],["indiapost","IndiaPost"]].map(([key,label]) => (
+          <button key={key} onClick={() => setActiveTab(key)} style={{ padding:"10px 20px", fontSize:12, fontWeight:600, background:"none", border:"none", borderBottom: activeTab===key ? `2px solid #3b82f6` : "2px solid transparent", color: activeTab===key ? "#3b82f6" : t.mu, cursor:"pointer", transition:"color 0.15s", marginBottom:-1 }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="dash-content fade">
+
+      {activeTab === "main" && <>
 
         {/* KPIs */}
         <div className="grid-kpi">
@@ -799,8 +820,88 @@ export default function Dashboard() {
 
         <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
           <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Production DB · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
-          <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Auto-refresh 1h · metaconnect.up.railway.app</span>
+          <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Auto-refresh 3h · metaconnect.up.railway.app</span>
         </div>
+
+      </>}
+
+      {activeTab === "indiapost" && (() => {
+        const ipk = data.ipKpis?.[0] || {};
+        const pendingCustoms = parseInt(data.ipPendingCustoms?.[0]?.count || 0);
+        const ipSpark = (data.ipDailyTrend||[]).map(d => d.shipments);
+        return (
+          <>
+            {/* IndiaPost KPIs */}
+            <div className="grid-kpi" style={{ gridTemplateColumns:"repeat(4,1fr)" }}>
+              <KPICard label="Total Shipments" loading={loading} value={fmt.number(ipk.total)} sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ipSpark} color="#ef4444" t={t}/>
+              <KPICard label="Active" loading={loading} value={fmt.number(ipk.active)} sub="Non-cancelled" sparkData={ipSpark} color="#10b981" t={t}/>
+              <KPICard label="Delivered" loading={loading} value={fmt.number(ipk.delivered)} sub={ipk.active > 0 ? `${(ipk.delivered/ipk.active*100).toFixed(1)}% delivery rate` : ""} color="#3b82f6" t={t}/>
+              <KPICard label="Cancelled" loading={loading} value={fmt.number(ipk.cancelled)} sub={ipk.total > 0 ? `${(ipk.cancelled/ipk.total*100).toFixed(1)}% of total` : ""} color="#6b7280" t={t}/>
+            </div>
+
+            {/* Customs alert */}
+            {!loading && pendingCustoms > 0 && (
+              <div style={{ background:"#ef444418", border:"1px solid #ef444455", borderRadius:10, padding:"14px 20px", marginBottom:14, display:"flex", alignItems:"center", gap:14 }}>
+                <div style={{ width:36, height:36, borderRadius:8, background:"#ef444433", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>⚠</div>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:700, color:"#ef4444" }}>{pendingCustoms} shipment{pendingCustoms!==1?"s":""} held at customs — query response pending</div>
+                  <div style={{ fontSize:11, color:t.mu, marginTop:2 }}>Customs query received but query submission response not yet sent. Action required.</div>
+                </div>
+              </div>
+            )}
+
+            {/* Daily trend + status flow */}
+            <div className="grid-2col">
+              <Card title="Daily IndiaPost Shipments" accent="#ef4444" t={t}>
+                {loading
+                  ? <div style={{ height:150, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <BarChart data={data.ipDailyTrend||[]} xKey="day" yKey="shipments" color="#ef4444" height={140} t={t}/>}
+              </Card>
+              <Card title="Mail Type" accent="#8b5cf6" t={t}>
+                {loading
+                  ? <div style={{ height:140, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : <DonutChart data={(data.ipMailType||[]).map(r=>({...r,label:r.mail_type_cd||"Unknown"}))} labelKey="label" valueKey="count" t={t}/>}
+              </Card>
+            </div>
+
+            {/* Status flow */}
+            <Card title="Shipment Status Pipeline" accent="#10b981" t={t} style={{ marginBottom:14 }}>
+              {loading
+                ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                : (() => {
+                    const rows = data.ipStatusFlow||[];
+                    if (!rows.length) return <div style={{ color:t.mu, fontSize:12 }}>No data</div>;
+                    const total = rows.reduce((s,r) => s+(parseFloat(r.count)||0), 0)||1;
+                    return (
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                        {rows.map((r,i) => {
+                          const pct = (parseFloat(r.count)||0)/total*100;
+                          const c = statusColor(r.status);
+                          return (
+                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <div style={{ width:3, height:16, borderRadius:2, background:c, flexShrink:0 }}/>
+                              <span style={{ fontSize:11, color:t.s, width:200, flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ipStatusLabel(r.status)}</span>
+                              <div style={{ flex:1, height:5, background:t.sk, borderRadius:3 }}>
+                                <div style={{ width:`${pct}%`, height:"100%", background:`${c}99`, borderRadius:3 }}/>
+                              </div>
+                              <span style={{ fontSize:11, color:c, fontFamily:"monospace", width:44, textAlign:"right", flexShrink:0 }}>{parseInt(r.count).toLocaleString("en-IN")}</span>
+                              <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", width:36, textAlign:"right", flexShrink:0 }}>{pct.toFixed(1)}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+            </Card>
+
+            <div style={{ marginTop:16, display:"flex", justifyContent:"space-between" }}>
+              <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>IndiaPost · LP% and EY% scancodes · {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString("en-IN")}` : "Loading…"}</span>
+              <span style={{ fontSize:10, color:t.fa, fontFamily:"monospace" }}>Auto-refresh 3h · metaconnect.up.railway.app</span>
+            </div>
+          </>
+        );
+      })()}
+
       </div>
     </div>
   );
