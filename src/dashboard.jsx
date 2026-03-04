@@ -1,16 +1,18 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const PROXY = "/api/v2";
 const DB_ID = 2;
 const REFRESH_INTERVAL = 30000;
 
+const REVENUE_EXPR = `CASE WHEN iscancelled = 1 THEN 0 ELSE CASE WHEN final_charge_updated = 0 THEN advanceamount ELSE totalamount END END`;
+const ACTIVE_FILTER = `all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION')`;
+
 const QUERIES = {
-  kpis: `SELECT COUNT(*) as total_orders, SUM(totalfobvalue) as total_revenue, AVG(totalfobvalue) as avg_order_value, COUNT(DISTINCT customer_id) as unique_customers FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC LIMIT 10`,
-  dailyRevenue: `SELECT DATE(created_on) as day, COUNT(*) as orders, SUM(totalfobvalue) as revenue FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(created_on) ORDER BY day ASC`,
-  recentOrders: `SELECT o.id, o.created_on as created_at, o.totalfobvalue as total_amount, o.status, COALESCE(c.contact_name, c.email, CONCAT('Customer #', o.customer_id)) as customer_name FROM orders o LEFT JOIN customers c ON o.customer_id = c.id ORDER BY o.created_on DESC LIMIT 8`,
-  topProducts: `SELECT p.product as product_name, SUM(oli.quantity * oli.invoicerate) as revenue FROM orderlineitems oli LEFT JOIN products p ON oli.product = p.id WHERE oli.created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY p.id, p.product ORDER BY revenue DESC LIMIT 6`,
-  trackingStatus: `SELECT status, COUNT(*) as count FROM ordertracking WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY status ORDER BY count DESC`,
+  kpis: `SELECT COUNT(CASE WHEN iscancelled = 0 THEN id END) as total_orders, SUM(${REVENUE_EXPR}) as total_revenue, ROUND(SUM(${REVENUE_EXPR}) / NULLIF(COUNT(CASE WHEN iscancelled = 0 THEN id END), 0), 2) as avg_order_value, COUNT(DISTINCT CASE WHEN iscancelled = 0 THEN customerid END) as unique_customers FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND ${ACTIVE_FILTER}`,
+  ordersByStatus: `SELECT status, COUNT(*) as count FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND iscancelled = 0 AND ${ACTIVE_FILTER} GROUP BY status ORDER BY count DESC LIMIT 10`,
+  dailyRevenue: `SELECT DATE(created_on) as day, COUNT(CASE WHEN iscancelled = 0 THEN id END) as orders, SUM(${REVENUE_EXPR}) as revenue FROM orders WHERE created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND ${ACTIVE_FILTER} GROUP BY DATE(created_on) ORDER BY day ASC`,
+  recentOrders: `SELECT o.id, o.created_on as created_at, CASE WHEN o.final_charge_updated = 0 THEN o.advanceamount ELSE o.totalamount END as total_amount, o.status, COALESCE(c.contact_name, c.email, CONCAT('Customer #', o.customerid)) as customer_name FROM orders o LEFT JOIN customers c ON o.customerid = c.id WHERE o.${ACTIVE_FILTER} ORDER BY o.created_on DESC LIMIT 8`,
+  trackingStatus: `SELECT ot.status, COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid = o.id WHERE o.created_on >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY ot.status ORDER BY count DESC`,
 };
 
 async function runQuery(sql) {
@@ -229,52 +231,26 @@ export default function Dashboard() {
             )}
           </Card>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Card title="Top Products (30d)" accent="#f59e0b">
-              {loading ? <div style={{ height: 110, background: "#1f2937", borderRadius: 8, animation: "pulse 1.5s infinite" }} /> : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {(data.topProducts || []).slice(0, 5).map((p, i) => {
-                    const maxRev = Math.max(...(data.topProducts || []).map(x => parseFloat(x.revenue) || 0), 1);
-                    const pct = ((parseFloat(p.revenue) || 0) / maxRev) * 100;
-                    return (
-                      <div key={i}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                          <span style={{ fontSize: 11, color: "#d1d5db", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, marginRight: 8 }}>{p.product_name || "—"}</span>
-                          <span style={{ fontSize: 11, color: "#f59e0b", fontFamily: "monospace", flexShrink: 0 }}>{fmt.currency(p.revenue)}</span>
-                        </div>
-                        <div style={{ height: 3, background: "#1f2937", borderRadius: 2 }}>
-                          <div style={{ height: "100%", width: `${pct}%`, background: "#f59e0b44", borderRadius: 2, position: "relative" }}>
-                            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 2, background: "#f59e0b", borderRadius: 1 }} />
-                          </div>
-                        </div>
+          <Card title="Tracking Status" accent="#06b6d4">
+            {loading ? <div style={{ height: 90, background: "#1f2937", borderRadius: 8, animation: "pulse 1.5s infinite" }} /> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {(data.trackingStatus || []).slice(0, 6).map((t, i) => {
+                  const total = (data.trackingStatus || []).reduce((s, x) => s + (parseFloat(x.count) || 0), 0) || 1;
+                  const pct = ((parseFloat(t.count) || 0) / total) * 100, c = statusColor(t.status);
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 3, height: 18, borderRadius: 2, background: c, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, color: "#9ca3af", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.status || "Unknown"}</span>
+                      <span style={{ fontSize: 11, color: c, fontFamily: "monospace", flexShrink: 0 }}>{fmt.number(t.count)}</span>
+                      <div style={{ width: 44, height: 3, background: "#1f2937", borderRadius: 2 }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: `${c}55`, borderRadius: 2 }} />
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-
-            <Card title="Tracking Status" accent="#06b6d4">
-              {loading ? <div style={{ height: 90, background: "#1f2937", borderRadius: 8, animation: "pulse 1.5s infinite" }} /> : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  {(data.trackingStatus || []).slice(0, 6).map((t, i) => {
-                    const total = (data.trackingStatus || []).reduce((s, x) => s + (parseFloat(x.count) || 0), 0) || 1;
-                    const pct = ((parseFloat(t.count) || 0) / total) * 100, c = statusColor(t.status);
-                    return (
-                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ width: 3, height: 18, borderRadius: 2, background: c, flexShrink: 0 }} />
-                        <span style={{ fontSize: 11, color: "#9ca3af", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.status || "Unknown"}</span>
-                        <span style={{ fontSize: 11, color: c, fontFamily: "monospace", flexShrink: 0 }}>{fmt.number(t.count)}</span>
-                        <div style={{ width: 44, height: 3, background: "#1f2937", borderRadius: 2 }}>
-                          <div style={{ width: `${pct}%`, height: "100%", background: `${c}55`, borderRadius: 2 }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-          </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
         </div>
 
         <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between" }}>
