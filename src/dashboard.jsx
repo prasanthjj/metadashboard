@@ -108,6 +108,12 @@ function makeQueries(start, end) {
     ipCountries:       `SELECT destination_country, COUNT(*) as count, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
     ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
     ipTatDistribution: `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
+    networkRevenue:   `SELECT pointofentry as network, shippingmethod as service, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND iscancelled=0 AND pointofentry IS NOT NULL AND pointofentry!='' GROUP BY pointofentry,shippingmethod ORDER BY SUM(${REV}) DESC LIMIT 60`,
+    clearanceRevenue: `SELECT TRIM(destination_clearance) as clearance, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments FROM orders WHERE ${df} AND ${ACTF} AND destination_clearance IS NOT NULL AND destination_clearance!='' GROUP BY TRIM(destination_clearance) ORDER BY revenue DESC`,
+    weekOnWeek:       `SELECT YEARWEEK(created_on,1) as week_num, DATE_FORMAT(MIN(created_on),'%d %b') as week_start, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, SUM(${REV}) as revenue FROM orders WHERE created_on>=DATE_SUB(CURDATE(),INTERVAL 13 WEEK) AND ${ACTF} GROUP BY YEARWEEK(created_on,1) ORDER BY week_num ASC`,
+    kamRevenue:       `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')),'Unassigned') as kam, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')) ORDER BY revenue DESC LIMIT 20`,
+    customerTiers:    `SELECT CASE WHEN decile=1 THEN 'Top 10%' WHEN decile<=5 THEN 'Middle 40%' ELSE 'Last 50%' END as tier, COUNT(*) as customers, SUM(revenue) as total_revenue, SUM(shipments) as total_shipments FROM (SELECT customerid, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders WHERE ${df} AND ${ACTF} GROUP BY customerid) t GROUP BY tier ORDER BY total_revenue DESC`,
+    pickupNodePerf:   `SELECT c.service_node, COALESCE(fm.fm_partner,'No FM') as fm_carrier, COUNT(o.id) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id LEFT JOIN fm_manifest fm ON o.fm_manifest_scancode=fm.scancode WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND c.service_node IS NOT NULL AND c.service_node!='' GROUP BY c.service_node,fm.fm_partner ORDER BY revenue DESC LIMIT 30`,
   };
 }
 
@@ -709,7 +715,7 @@ export default function Dashboard() {
       {/* ── Content ── */}
       {/* ── Tab bar ── */}
       <div style={{ display:"flex", gap:0, padding:"0 24px", background:t.headerBg, borderBottom:`1px solid ${t.border}`, position:"sticky", top:53, zIndex:9 }}>
-        {[["main","Overall"],["indiapost","IndiaPost"]].map(([key,label]) => (
+        {[["main","Overall"],["indiapost","IndiaPost"],["analytics","Analytics"]].map(([key,label]) => (
           <button key={key} onClick={() => setActiveTab(key)} style={{ padding:"10px 20px", fontSize:12, fontWeight:600, background:"none", border:"none", borderBottom: activeTab===key ? `2px solid #3b82f6` : "2px solid transparent", color: activeTab===key ? "#3b82f6" : t.mu, cursor:"pointer", transition:"color 0.15s", marginBottom:-1 }}>
             {label}
           </button>
@@ -1173,6 +1179,304 @@ export default function Dashboard() {
                   })()}
             </Card>
 
+          </>
+        );
+      })()}
+
+      {/* ── Analytics Tab ── */}
+      {activeTab === "analytics" && (() => {
+        const totalRev  = parseFloat(data.kpis?.[0]?.total_revenue) || 0;
+        const totalOrd  = parseInt(data.kpis?.[0]?.total_orders)    || 0;
+        const uniqueCust= parseInt(data.kpis?.[0]?.unique_customers) || 0;
+
+        // Group networkRevenue rows by POE
+        const netRows    = data.networkRevenue || [];
+        const netGroups  = (() => {
+          const map = {};
+          netRows.forEach(r => {
+            const key = r.network || "Unknown";
+            if (!map[key]) map[key] = { network: key, total: 0, services: {} };
+            map[key].total += parseFloat(r.revenue) || 0;
+            map[key].services[r.service] = (map[key].services[r.service] || 0) + (parseFloat(r.revenue) || 0);
+          });
+          return Object.values(map).sort((a,b) => b.total - a.total).slice(0, 15);
+        })();
+        const netMax = Math.max(...netGroups.map(g => g.total), 1);
+        const SVC_COLORS = { XL:"#3b82f6", AP:"#8b5cf6", AE:"#f59e0b", IP:"#10b981", IE:"#06b6d4", AN:"#f97316" };
+
+        // WoW data
+        const wowRows  = data.weekOnWeek || [];
+        const wowMax   = Math.max(...wowRows.map(r => parseFloat(r.revenue) || 0), 1);
+
+        // KAM
+        const kamRows  = data.kamRevenue || [];
+        const kamTotal = kamRows.reduce((s,r) => s + (parseFloat(r.revenue)||0), 0);
+        const kamMax   = Math.max(...kamRows.map(r => parseFloat(r.revenue)||0), 1);
+
+        // Clearance
+        const clrRows  = data.clearanceRevenue || [];
+        const clrTotal = clrRows.reduce((s,r) => s + (parseFloat(r.revenue)||0), 0);
+        const clrMax   = Math.max(...clrRows.map(r => parseFloat(r.revenue)||0), 1);
+        const CLR_COLORS = ["#3b82f6","#8b5cf6","#10b981","#f59e0b","#f97316","#06b6d4","#ef4444","#ec4899"];
+
+        // Customer tiers
+        const tierRows = data.customerTiers || [];
+        const tierTotalRev = tierRows.reduce((s,r) => s + (parseFloat(r.total_revenue)||0), 0);
+        const TIER_COLORS = { "Top 10%":"#f59e0b", "Middle 40%":"#3b82f6", "Last 50%":"#6b7280" };
+
+        // Pickup node
+        const nodeRows = data.pickupNodePerf || [];
+        const nodeGroups = (() => {
+          const map = {};
+          nodeRows.forEach(r => {
+            const nd = r.service_node || "Unknown";
+            if (!map[nd]) map[nd] = { node: nd, total: 0, carriers: {} };
+            map[nd].total += parseFloat(r.revenue) || 0;
+            const fm = r.fm_carrier || "No FM";
+            map[nd].carriers[fm] = (map[nd].carriers[fm] || 0) + (parseFloat(r.revenue) || 0);
+          });
+          return Object.values(map).sort((a,b) => b.total - a.total);
+        })();
+        const nodeMax = Math.max(...nodeGroups.map(g => g.total), 1);
+
+        const NODE_LABELS = { JPRPC1:"Jaipur", DELPC1:"Delhi", SURPC1:"Surat", MUMPC1:"Mumbai", BLRPC1:"Bangalore" };
+
+        return (
+          <>
+            {/* KPI row */}
+            <div className="grid-kpi" style={{ marginBottom:14 }}>
+              <KPICard label="Unique Customers"  loading={loading} value={fmt.number(uniqueCust)}  sub="Active shippers" color="#8b5cf6" t={t}/>
+              <KPICard label="Total Shipments"   loading={loading} value={fmt.number(totalOrd)}    sub={`${dateRange.start} → ${dateRange.end}`} sparkData={ordSpark} color="#10b981" t={t}/>
+              <KPICard label="Total Revenue"     loading={loading} value={fmt.currency(totalRev)}  sub={`${dateRange.start} → ${dateRange.end}`} sparkData={revSpark} color="#3b82f6" t={t}/>
+              <KPICard label="Avg Shipment Value" loading={loading} value={fmt.currency(data.kpis?.[0]?.avg_order_value)} sub="Per shipment" color="#f59e0b" t={t}/>
+              <KPICard label="KAMs Active"       loading={loading} value={fmt.number(kamRows.filter(r=>r.kam!=="Unassigned").length)} sub="Key account managers" color="#06b6d4" t={t}/>
+            </div>
+
+            {/* Row: Network Revenue + Clearance Revenue */}
+            <div className="grid-2col">
+              <Card title="Network-wise Revenue  ·  by Gateway (POE)" accent="#3b82f6" t={t}>
+                {loading
+                  ? <div style={{ height:260, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : netGroups.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {netGroups.map((g,i) => {
+                          const barW = (g.total / netMax) * 100;
+                          const svcs = Object.entries(g.services).sort((a,b) => b[1]-a[1]);
+                          return (
+                            <div key={i}>
+                              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                                <span style={{ fontSize:11, color:t.s, fontFamily:"monospace", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"50%" }}>{g.network}</span>
+                                <div style={{ display:"flex", gap:6, alignItems:"center", flexShrink:0 }}>
+                                  {svcs.map(([svc,rev]) => (
+                                    <span key={svc} style={{ fontSize:10, color: SVC_COLORS[svc]||t.mu, fontFamily:"monospace", background:`${SVC_COLORS[svc]||t.mu}18`, padding:"1px 5px", borderRadius:4 }}>{svc} {fmt.currency(rev)}</span>
+                                  ))}
+                                  <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:700 }}>{fmt.currency(g.total)}</span>
+                                </div>
+                              </div>
+                              <div style={{ height:6, background:t.sk, borderRadius:3, overflow:"hidden" }}>
+                                {svcs.reduce((acc,  [svc,rev]) => {
+                                  const w = (rev/netMax)*100;
+                                  acc.els.push(<div key={svc} style={{ width:`${w}%`, height:"100%", background: SVC_COLORS[svc]||"#6b7280", display:"inline-block" }}/>);
+                                  return acc;
+                                }, { els:[] }).els}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                }
+              </Card>
+
+              <Card title="Clearance-wise Revenue  ·  by Destination Clearance Type" accent="#06b6d4" t={t}>
+                {loading
+                  ? <div style={{ height:260, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : clrRows.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                        {clrRows.map((r,i) => {
+                          const rev = parseFloat(r.revenue)||0;
+                          const pct = clrTotal > 0 ? (rev/clrTotal*100) : 0;
+                          const barW = (rev/clrMax)*100;
+                          const color = CLR_COLORS[i % CLR_COLORS.length];
+                          return (
+                            <div key={i}>
+                              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                                <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"60%" }}>{r.clearance||"—"}</span>
+                                <div style={{ display:"flex", gap:10, flexShrink:0 }}>
+                                  <span style={{ fontSize:11, color, fontFamily:"monospace", fontWeight:700 }}>{fmt.currency(rev)}</span>
+                                  <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>{pct.toFixed(1)}%</span>
+                                </div>
+                              </div>
+                              <div style={{ height:5, background:t.sk, borderRadius:3 }}>
+                                <div style={{ width:`${barW}%`, height:"100%", background:`${color}99`, borderRadius:3 }}/>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:6, display:"flex", justifyContent:"space-between" }}>
+                          <span style={{ fontSize:11, color:t.mu }}>{clrRows.length} types</span>
+                          <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(clrTotal)}</span>
+                        </div>
+                      </div>
+                }
+              </Card>
+            </div>
+
+            {/* Row: Week-on-Week + KAM Revenue */}
+            <div className="grid-2col">
+              <Card title="Week-on-Week Revenue  ·  Rolling 13 weeks" accent="#f59e0b" t={t}>
+                {loading
+                  ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : wowRows.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : (() => {
+                        return (
+                          <div>
+                            <div style={{ display:"flex", alignItems:"flex-end", gap:4, height:140 }}>
+                              {wowRows.map((r,i) => {
+                                const rev  = parseFloat(r.revenue)||0;
+                                const pct  = (rev/wowMax)*100;
+                                const prev = i>0 ? (parseFloat(wowRows[i-1].revenue)||0) : null;
+                                const wow  = prev != null && prev > 0 ? ((rev-prev)/prev*100) : null;
+                                const color = wow == null ? "#3b82f6" : wow >= 0 ? "#10b981" : "#ef4444";
+                                return (
+                                  <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", height:"100%", position:"relative" }}
+                                    title={`${r.week_start}: ${fmt.currency(rev)}${wow!=null ? ` (${wow>=0?"+":""}${wow.toFixed(1)}% WoW)` : ""}`}>
+                                    {wow != null && <div style={{ position:"absolute", top:-14, left:"50%", transform:"translateX(-50%)", fontSize:8, color, fontFamily:"monospace", whiteSpace:"nowrap" }}>{wow>=0?"+":""}{wow.toFixed(0)}%</div>}
+                                    <div style={{ flex:1, width:"100%", display:"flex", alignItems:"flex-end" }}>
+                                      <div style={{ width:"100%", background:`${color}33`, borderRadius:"3px 3px 0 0", height:`${pct}%`, minHeight:rev>0?4:0, borderBottom:`2px solid ${color}` }}/>
+                                    </div>
+                                    <div style={{ fontSize:8, color:t.mu, fontFamily:"monospace", marginTop:4, textAlign:"center", overflow:"hidden" }}>{r.week_start}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ display:"flex", justifyContent:"space-between", marginTop:8 }}>
+                              <span style={{ fontSize:10, color:t.mu }}>{wowRows.length} weeks</span>
+                              <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>Bars: green=WoW↑  red=WoW↓</span>
+                            </div>
+                          </div>
+                        );
+                      })()
+                }
+              </Card>
+
+              <Card title="KAM-wise Revenue  ·  Key Account Managers" accent="#8b5cf6" t={t}>
+                {loading
+                  ? <div style={{ height:200, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : kamRows.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                        {kamRows.map((r,i) => {
+                          const rev  = parseFloat(r.revenue)||0;
+                          const pct  = kamTotal > 0 ? (rev/kamTotal*100) : 0;
+                          const barW = (rev/kamMax)*100;
+                          return (
+                            <div key={i}>
+                              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                                <span style={{ fontSize:11, color: r.kam==="Unassigned" ? t.mu : t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"55%" }}>{r.kam||"—"}</span>
+                                <div style={{ display:"flex", gap:10, flexShrink:0 }}>
+                                  <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.shipments)} ships</span>
+                                  <span style={{ fontSize:11, color:"#8b5cf6", fontFamily:"monospace", fontWeight:700 }}>{fmt.currency(rev)}</span>
+                                  <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace" }}>{pct.toFixed(1)}%</span>
+                                </div>
+                              </div>
+                              <div style={{ height:4, background:t.sk, borderRadius:2 }}>
+                                <div style={{ width:`${barW}%`, height:"100%", background: r.kam==="Unassigned" ? "#6b728088" : "#8b5cf699", borderRadius:2 }}/>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:6, display:"flex", justifyContent:"space-between" }}>
+                          <span style={{ fontSize:11, color:t.mu }}>{kamRows.filter(r=>r.kam!=="Unassigned").length} KAMs</span>
+                          <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(kamTotal)}</span>
+                        </div>
+                      </div>
+                }
+              </Card>
+            </div>
+
+            {/* Row: Customer Tiers + Pickup Node */}
+            <div className="grid-2col">
+              <Card title="Customer Revenue Tiers  ·  NTILE distribution" accent="#f97316" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : tierRows.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : (() => {
+                        const tierOrder = ["Top 10%","Middle 40%","Last 50%"];
+                        const sorted = tierOrder.map(name => tierRows.find(r=>r.tier===name)).filter(Boolean);
+                        return (
+                          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                            {sorted.map((r,i) => {
+                              const rev  = parseFloat(r.total_revenue)||0;
+                              const pct  = tierTotalRev > 0 ? (rev/tierTotalRev*100) : 0;
+                              const color= TIER_COLORS[r.tier] || "#6b7280";
+                              return (
+                                <div key={i}>
+                                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+                                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                      <div style={{ width:10, height:10, borderRadius:3, background:color, flexShrink:0 }}/>
+                                      <span style={{ fontSize:13, fontWeight:700, color }}>{r.tier}</span>
+                                    </div>
+                                    <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+                                      <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.customers)} custs</span>
+                                      <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.total_shipments)} ships</span>
+                                      <span style={{ fontSize:13, fontWeight:700, color, fontFamily:"monospace" }}>{fmt.currency(rev)}</span>
+                                    </div>
+                                  </div>
+                                  <div style={{ height:12, background:t.sk, borderRadius:6, overflow:"hidden" }}>
+                                    <div style={{ width:`${pct}%`, height:"100%", background:`${color}cc`, borderRadius:6, display:"flex", alignItems:"center", paddingLeft:8 }}>
+                                      {pct > 10 && <span style={{ fontSize:9, color:"#ffffff", fontFamily:"monospace", fontWeight:700 }}>{pct.toFixed(1)}%</span>}
+                                    </div>
+                                  </div>
+                                  {pct <= 10 && <div style={{ fontSize:9, color:t.mu, fontFamily:"monospace", marginTop:2 }}>{pct.toFixed(1)}% of revenue</div>}
+                                </div>
+                              );
+                            })}
+                            <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:8, display:"flex", justifyContent:"space-between" }}>
+                              <span style={{ fontSize:11, color:t.mu }}>{tierRows.reduce((s,r)=>s+(parseInt(r.customers)||0),0)} total customers</span>
+                              <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(tierTotalRev)}</span>
+                            </div>
+                          </div>
+                        );
+                      })()
+                }
+              </Card>
+
+              <Card title="Pickup Node Performance  ·  by Service Node & FM Carrier" accent="#10b981" t={t}>
+                {loading
+                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+                  : nodeGroups.length === 0
+                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+                    : <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                        {nodeGroups.map((g,i) => {
+                          const barW = (g.total/nodeMax)*100;
+                          const fms  = Object.entries(g.carriers).sort((a,b)=>b[1]-a[1]);
+                          return (
+                            <div key={i}>
+                              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                                <span style={{ fontSize:12, fontWeight:700, color:t.p }}>{NODE_LABELS[g.node] || g.node}</span>
+                                <span style={{ fontSize:11, color:"#10b981", fontFamily:"monospace", fontWeight:700 }}>{fmt.currency(g.total)}</span>
+                              </div>
+                              <div style={{ height:6, background:t.sk, borderRadius:3, marginBottom:5 }}>
+                                <div style={{ width:`${barW}%`, height:"100%", background:"#10b98188", borderRadius:3 }}/>
+                              </div>
+                              <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                                {fms.map(([fm,rev]) => (
+                                  <span key={fm} style={{ fontSize:10, color:t.mu, background:t.sk, padding:"2px 7px", borderRadius:4, fontFamily:"monospace" }}>
+                                    {fm}: {fmt.currency(rev)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                }
+              </Card>
+            </div>
           </>
         );
       })()}
