@@ -647,13 +647,62 @@ function ExceptionShipmentsCard({ rows, loading, t }) {
 }
 
 // ── StaleShipmentsCard ────────────────────────────────────────────────────────
-function StaleShipmentsCard({ rows, boxRows, loading, t }) {
-  const [search, setSearch] = useState("");
+const STALE_BUCKETS = [
+  { label:"≤3d",   color:"#f59e0b", test: d => d <= 3 },
+  { label:"3–5d",  color:"#f97316", test: d => d >  3 && d <= 5 },
+  { label:"5–10d", color:"#ef4444", test: d => d >  5 && d <= 10 },
+  { label:">10d",  color:"#dc2626", test: d => d >  10 },
+];
 
-  const q        = search.trim().toLowerCase();
-  const filtered = (rows||[]).filter(r => !q || r.scancode?.toLowerCase().includes(q) || r.customer_name?.toLowerCase().includes(q));
-  const total    = (rows||[]).length;
-  const avgDays  = total > 0 ? Math.round((rows||[]).reduce((s,r)=>s+(parseInt(r.days_stale)||0),0)/total) : 0;
+function StaleShipmentsCard({ rows, boxRows, loading, t }) {
+  const [search,      setSearch]      = useState("");
+  const [bucketFilter,setBucketFilter]= useState(null);   // label string or null
+  const [carrierFilter,setCarrierFilter]= useState(null);
+  const [statusFilter, setStatusFilter] = useState(null);
+
+  const all = rows||[];
+  const total   = all.length;
+  const avgDays = total > 0 ? Math.round(all.reduce((s,r)=>s+(parseInt(r.days_stale)||0),0)/total) : 0;
+
+  // Unique values for filter pills (derived from full unfiltered set)
+  const carriers = [...new Set(all.map(r=>r.lmcarrier||"Unknown").filter(Boolean))].sort();
+  const statuses = [...new Set(all.map(r=>r.status||"Unknown"))].sort();
+
+  const q = search.trim().toLowerCase();
+  const filtered = all.filter(r => {
+    const d = parseInt(r.days_stale)||0;
+    if (bucketFilter  && !STALE_BUCKETS.find(b=>b.label===bucketFilter)?.test(d)) return false;
+    if (carrierFilter && (r.lmcarrier||"Unknown") !== carrierFilter)               return false;
+    if (statusFilter  && (r.status||"Unknown")    !== statusFilter)                return false;
+    if (q && !r.scancode?.toLowerCase().includes(q) && !r.customer_name?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  const PillRow = ({ label, items, active, setActive, colorFn }) => (
+    <div style={{ display:"flex", gap:4, alignItems:"center", flexWrap:"wrap" }}>
+      <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", minWidth:52, flexShrink:0 }}>{label}</span>
+      <button onClick={() => setActive(null)}
+        style={{ padding:"2px 9px", borderRadius:20, border:`1px solid ${t.border}`, fontSize:10, fontFamily:"monospace", cursor:"pointer",
+          background: active===null ? t.p : t.sk, color: active===null ? (t.dark?"#000":"#fff") : t.mu }}>
+        All
+      </button>
+      {items.map(item => {
+        const color  = colorFn ? colorFn(item) : "#3b82f6";
+        const isActive = active === (typeof item === "object" ? item.label : item);
+        const key    = typeof item === "object" ? item.label : item;
+        const count  = typeof item === "object"
+          ? all.filter(r => item.test(parseInt(r.days_stale)||0)).length
+          : item === "_carrier_" ? 0 : all.filter(r => (label==="Carrier" ? r.lmcarrier||"Unknown" : r.status||"Unknown") === item).length;
+        return (
+          <button key={key} onClick={() => setActive(a => a===key ? null : key)}
+            style={{ padding:"2px 9px", borderRadius:20, border:`1px solid ${isActive ? color : color+"55"}`, fontSize:10, fontFamily:"monospace", cursor:"pointer",
+              background: isActive ? color : `${color}15`, color: isActive ? "#fff" : color }}>
+            {typeof item === "object" ? item.label : item.replace(/_/g," ")} · {count}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   return (
     <Card title={`No Update >3 Days  ·  ${total} shipments`} accent="#ef4444" t={t}>
@@ -661,42 +710,75 @@ function StaleShipmentsCard({ rows, boxRows, loading, t }) {
         ? <div style={{ height:260, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
         : <>
             {/* Summary stats */}
-            <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap" }}>
-              <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
-                <div style={{ fontSize:20, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{total}</div>
-                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Stale orders</div>
+            <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+              <div style={{ background:t.sk, borderRadius:8, padding:"7px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:18, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{total}</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:1 }}>Stale orders</div>
               </div>
-              {avgDays > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
-                <div style={{ fontSize:20, fontWeight:700, color:staleColor(avgDays), fontFamily:"monospace" }}>{avgDays}d</div>
-                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Avg stale</div>
+              {avgDays > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"7px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:18, fontWeight:700, color:staleColor(avgDays), fontFamily:"monospace" }}>{avgDays}d</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:1 }}>Avg stale</div>
               </div>}
-              {(boxRows||[]).length > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
-                <div style={{ fontSize:20, fontWeight:700, color:"#f97316", fontFamily:"monospace" }}>{(boxRows||[]).length}</div>
-                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Stale boxes</div>
+              {(boxRows||[]).length > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"7px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:18, fontWeight:700, color:"#f97316", fontFamily:"monospace" }}>{(boxRows||[]).length}</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:1 }}>Stale boxes</div>
               </div>}
+              <div style={{ marginLeft:"auto", display:"flex", alignItems:"center" }}>
+                <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{filtered.length} shown</span>
+              </div>
             </div>
+
+            {/* Filter rows */}
+            <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:10, background:t.sk, borderRadius:8, padding:"8px 10px" }}>
+              {/* Days bucket */}
+              <PillRow label="Days"
+                items={STALE_BUCKETS}
+                active={bucketFilter}
+                setActive={setBucketFilter}
+                colorFn={item => item.color}/>
+              {/* LM Carrier */}
+              {carriers.length > 0 && <PillRow label="Carrier"
+                items={carriers}
+                active={carrierFilter}
+                setActive={setCarrierFilter}
+                colorFn={() => "#3b82f6"}/>}
+              {/* Status */}
+              {statuses.length > 0 && <PillRow label="Status"
+                items={statuses}
+                active={statusFilter}
+                setActive={setStatusFilter}
+                colorFn={s => exStatusColor(s)}/>}
+            </div>
+
             {/* Search */}
             <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by scancode or customer…"
                 style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
               {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13 }}>✕</button>}
-              <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} shown</span>
+              {(bucketFilter||carrierFilter||statusFilter) && (
+                <button onClick={() => { setBucketFilter(null); setCarrierFilter(null); setStatusFilter(null); setSearch(""); }}
+                  style={{ fontSize:10, color:"#ef4444", background:"#ef444415", border:"1px solid #ef444444", borderRadius:6, padding:"4px 8px", cursor:"pointer", fontFamily:"monospace", whiteSpace:"nowrap" }}>
+                  ✕ Clear
+                </button>
+              )}
             </div>
+
             {/* Table */}
-            <div style={{ maxHeight:260, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
+            <div style={{ maxHeight:240, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
                 <thead><tr style={{ background:t.sk, position:"sticky", top:0 }}>
-                  {["Scancode","Customer","Country","Current Status","Last Update","Stale"].map(h => <AlertTH key={h} t={t}>{h}</AlertTH>)}
+                  {["Scancode","Customer","Country","Status","Carrier","Last Update","Stale"].map(h => <AlertTH key={h} t={t}>{h}</AlertTH>)}
                 </tr></thead>
                 <tbody>
                   {filtered.length === 0
-                    ? <tr><td colSpan={6} style={{ padding:20, textAlign:"center", color:t.mu }}>No stale shipments</td></tr>
+                    ? <tr><td colSpan={7} style={{ padding:20, textAlign:"center", color:t.mu }}>No matching shipments</td></tr>
                     : filtered.map((r,i) => (
                         <tr key={i} className="rh">
                           <AlertTD t={t} style={{ fontFamily:"monospace", color:"#3b82f6", whiteSpace:"nowrap" }}>{r.scancode||"—"}</AlertTD>
-                          <AlertTD t={t} style={{ color:t.s, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ color:t.s, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
                           <AlertTD t={t} style={{ color:t.s }}>{r.destination_country||"—"}</AlertTD>
-                          <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, fontSize:10 }}>{(r.status||"—").replace(/_/g," ")}</AlertTD>
+                          <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, fontSize:10, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{(r.status||"—").replace(/_/g," ")}</AlertTD>
+                          <AlertTD t={t} style={{ color:t.mu, fontSize:10, maxWidth:110, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</AlertTD>
                           <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, whiteSpace:"nowrap" }}>{r.last_update||"—"}</AlertTD>
                           <AlertTD t={t} style={{ fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap", color:staleColor(r.days_stale) }}>{r.days_stale}d</AlertTD>
                         </tr>
