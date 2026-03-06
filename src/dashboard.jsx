@@ -114,7 +114,7 @@ function makeQueries(start, end) {
     kamRevenue:       `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')),'Unassigned') as kam, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')) ORDER BY revenue DESC LIMIT 20`,
     customerTiers:    `SELECT CASE WHEN decile=1 THEN 'Top 10%' WHEN decile<=5 THEN 'Middle 40%' ELSE 'Last 50%' END as tier, COUNT(*) as customers, SUM(revenue) as total_revenue, SUM(shipments) as total_shipments FROM (SELECT customerid, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders WHERE ${df} AND ${ACTF} GROUP BY customerid) t GROUP BY tier ORDER BY total_revenue DESC`,
     pickupNodePerf:   `SELECT c.service_node, COALESCE(fm.fm_partner,'No FM') as fm_carrier, COUNT(o.id) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id LEFT JOIN fm_manifest fm ON o.fm_manifest_scancode=fm.scancode WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND c.service_node IS NOT NULL AND c.service_node!='' GROUP BY c.service_node,fm.fm_partner ORDER BY revenue DESC LIMIT 30`,
-    livePickups:      `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 ORDER BY o.created_on ASC LIMIT 200`,
+    livePickups:      `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 AND (c.service_node IS NULL OR c.service_node NOT LIKE 'PPN%') ORDER BY c.service_node ASC, o.created_on ASC LIMIT 200`,
     newCustomers:     `SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, DATE(MIN(o.created_on)) as first_order_ever, COUNT(o.id) as total_orders, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 GROUP BY o.customerid,c.company,c.email,c.service_node HAVING DATE(MIN(o.created_on))>='${start}' AND DATE(MIN(o.created_on))<='${end}' ORDER BY first_order_ever DESC LIMIT 50`,
     reactivatedCustomers: `SELECT customerid,customer_name,DATE(first_in_range) as first_in_range,DATE(last_before_range) as last_before_range,DATEDIFF(first_in_range,last_before_range) as gap_days,orders_in_range,service_node FROM (SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,MIN(CASE WHEN o.created_on>='${start}' AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) THEN o.created_on END) as first_in_range,MAX(CASE WHEN o.created_on<'${start}' THEN o.created_on END) as last_before_range,COUNT(DISTINCT CASE WHEN o.created_on>='${start}' THEN o.id END) as orders_in_range,c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.created_on>=DATE_SUB('${start}',INTERVAL 180 DAY) AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) GROUP BY o.customerid,c.company,c.email,c.service_node) t WHERE first_in_range IS NOT NULL AND last_before_range IS NOT NULL AND DATEDIFF(first_in_range,last_before_range)>=15 ORDER BY gap_days DESC LIMIT 50`,
   };
@@ -549,58 +549,100 @@ function ThemeSelector({ themeKey, setThemeKey, t }) {
 const NODE_LABELS_GLOBAL = { JPRPC1:"Jaipur", DELPC1:"Delhi", SURPC1:"Surat", MUMPC1:"Mumbai", BLRPC1:"Bangalore" };
 
 function LivePickupList({ rows, loading, t }) {
-  const [search, setSearch] = useState("");
-  const filtered = search.trim()
-    ? rows.filter(r =>
-        r.scancode?.toLowerCase().includes(search.toLowerCase()) ||
-        r.customer_name?.toLowerCase().includes(search.toLowerCase()) ||
-        r.destination_country?.toLowerCase().includes(search.toLowerCase())
-      )
-    : rows;
+  const [search,    setSearch]    = useState("");
+  const [collapsed, setCollapsed] = useState({});
+
+  const toggle = node => setCollapsed(c => ({ ...c, [node]: !c[node] }));
+
+  // Group by service_node
+  const groups = (() => {
+    const map = {};
+    rows.forEach(r => {
+      const key = r.service_node || "Unknown";
+      if (!map[key]) map[key] = [];
+      map[key].push(r);
+    });
+    // Sort nodes alphabetically; Unknown last
+    return Object.entries(map).sort(([a],[b]) => a === "Unknown" ? 1 : b === "Unknown" ? -1 : a.localeCompare(b));
+  })();
+
+  const q = search.trim().toLowerCase();
+  const matchRow = r =>
+    !q ||
+    r.scancode?.toLowerCase().includes(q) ||
+    r.customer_name?.toLowerCase().includes(q) ||
+    r.destination_country?.toLowerCase().includes(q);
+
+  const COLS = ["Scancode","Customer","Country","Service","Carrier","Created","Age"];
+
   return (
     <Card title={`Live OUT_FOR_PICKUP  ·  ${rows.length} awaiting pickup`} accent="#ef4444" t={t} style={{ marginBottom:14 }}>
       {loading
         ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
         : <>
-            <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+            <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"center" }}>
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by scancode, customer or country…"
                 style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
               {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13, padding:"0 4px" }}>✕</button>}
-              <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} shown</span>
             </div>
-            <div style={{ maxHeight:320, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
-                <thead>
-                  <tr style={{ background:t.sk, position:"sticky", top:0 }}>
-                    {["Scancode","Customer","Country","Service","Carrier","Node","Created","Age"].map(h => (
-                      <th key={h} style={{ padding:"6px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0
-                    ? <tr><td colSpan={8} style={{ padding:20, textAlign:"center", color:t.mu }}>No results</td></tr>
-                    : filtered.map((r,i) => {
-                        const age = parseInt(r.age_days) || 0;
-                        return (
-                          <tr key={i} className="rh">
-                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:"#3b82f6", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.scancode||"—"}</td>
-                            <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</td>
-                            <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.destination_country||"—"}</td>
-                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.shippingmethod||"—"}</td>
-                            <td style={{ padding:"6px 10px", color:t.mu, borderBottom:`1px solid ${t.border}`, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</td>
-                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.mu, borderBottom:`1px solid ${t.border}` }}>{NODE_LABELS_GLOBAL[r.service_node]||r.service_node||"—"}</td>
-                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.mu, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.created_date||"—"}</td>
-                            <td style={{ padding:"6px 10px", fontFamily:"monospace", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap",
-                              color: age >= 3 ? "#ef4444" : age >= 1 ? "#f59e0b" : "#10b981" }}>
-                              {age}d
-                            </td>
-                          </tr>
-                        );
-                      })
-                  }
-                </tbody>
-              </table>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {groups.map(([node, nodeRows]) => {
+                const filtered = nodeRows.filter(matchRow);
+                if (filtered.length === 0) return null;
+                const label    = NODE_LABELS_GLOBAL[node] || node;
+                const isOpen   = !collapsed[node];
+                const oldest   = Math.max(...filtered.map(r => parseInt(r.age_days)||0));
+                const urgColor = oldest >= 3 ? "#ef4444" : oldest >= 1 ? "#f59e0b" : "#10b981";
+                return (
+                  <div key={node} style={{ border:`1px solid ${t.border}`, borderRadius:8, overflow:"hidden" }}>
+                    {/* Node header — clickable to collapse */}
+                    <button onClick={() => toggle(node)}
+                      style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:t.sk, border:"none", cursor:"pointer", textAlign:"left" }}>
+                      <span style={{ fontSize:13, color:t.mu, fontFamily:"monospace", transition:"transform 0.15s", display:"inline-block", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                      <span style={{ fontSize:13, fontWeight:700, color:t.p, flex:1 }}>{label}</span>
+                      <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", background:t.border, padding:"2px 8px", borderRadius:4 }}>{node}</span>
+                      <span style={{ fontSize:11, color:urgColor, fontFamily:"monospace", fontWeight:700 }}>{filtered.length} shipments</span>
+                      {oldest > 0 && <span style={{ fontSize:10, color:urgColor, fontFamily:"monospace" }}>oldest {oldest}d</span>}
+                    </button>
+                    {/* Collapsible table */}
+                    {isOpen && (
+                      <div style={{ overflowX:"auto" }}>
+                        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                          <thead>
+                            <tr style={{ background:`${t.sk}88` }}>
+                              {COLS.map(h => (
+                                <th key={h} style={{ padding:"5px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map((r,i) => {
+                              const age = parseInt(r.age_days) || 0;
+                              return (
+                                <tr key={i} className="rh">
+                                  <td style={{ padding:"6px 10px", fontFamily:"monospace", color:"#3b82f6", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.scancode||"—"}</td>
+                                  <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</td>
+                                  <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.destination_country||"—"}</td>
+                                  <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.shippingmethod||"—"}</td>
+                                  <td style={{ padding:"6px 10px", color:t.mu, borderBottom:`1px solid ${t.border}`, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</td>
+                                  <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.mu, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.created_date||"—"}</td>
+                                  <td style={{ padding:"6px 10px", fontFamily:"monospace", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap",
+                                    color: age >= 3 ? "#ef4444" : age >= 1 ? "#f59e0b" : "#10b981" }}>
+                                    {age}d
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {groups.every(([node, nodeRows]) => nodeRows.filter(matchRow).length === 0) && (
+                <div style={{ color:t.mu, fontSize:12, padding:"20px 0", textAlign:"center" }}>No results</div>
+              )}
             </div>
           </>
       }
