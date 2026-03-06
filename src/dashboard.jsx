@@ -1922,6 +1922,7 @@ export default function Dashboard() {
                                       <div style={{ width:"100%", background:`${color}33`, borderRadius:"3px 3px 0 0", height:`${pct}%`, minHeight:rev>0?4:0, borderBottom:`2px solid ${color}` }}/>
                                     </div>
                                     <div style={{ fontSize:8, color:t.mu, fontFamily:"monospace", marginTop:4, textAlign:"center", overflow:"hidden" }}>{r.week_start}</div>
+                                    <div style={{ fontSize:8, color, fontFamily:"monospace", textAlign:"center", overflow:"hidden", fontWeight:600 }}>{fmt.currency(rev)}</div>
                                   </div>
                                 );
                               })}
