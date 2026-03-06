@@ -114,6 +114,9 @@ function makeQueries(start, end) {
     kamRevenue:       `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')),'Unassigned') as kam, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')) ORDER BY revenue DESC LIMIT 20`,
     customerTiers:    `SELECT CASE WHEN decile=1 THEN 'Top 10%' WHEN decile<=5 THEN 'Middle 40%' ELSE 'Last 50%' END as tier, COUNT(*) as customers, SUM(revenue) as total_revenue, SUM(shipments) as total_shipments FROM (SELECT customerid, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders WHERE ${df} AND ${ACTF} GROUP BY customerid) t GROUP BY tier ORDER BY total_revenue DESC`,
     pickupNodePerf:   `SELECT c.service_node, COALESCE(fm.fm_partner,'No FM') as fm_carrier, COUNT(o.id) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id LEFT JOIN fm_manifest fm ON o.fm_manifest_scancode=fm.scancode WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND c.service_node IS NOT NULL AND c.service_node!='' GROUP BY c.service_node,fm.fm_partner ORDER BY revenue DESC LIMIT 30`,
+    livePickups:      `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 ORDER BY o.created_on ASC LIMIT 200`,
+    newCustomers:     `SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, DATE(MIN(o.created_on)) as first_order_ever, COUNT(o.id) as total_orders, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 GROUP BY o.customerid,c.company,c.email,c.service_node HAVING DATE(MIN(o.created_on))>='${start}' AND DATE(MIN(o.created_on))<='${end}' ORDER BY first_order_ever DESC LIMIT 50`,
+    reactivatedCustomers: `SELECT customerid,customer_name,DATE(first_in_range) as first_in_range,DATE(last_before_range) as last_before_range,DATEDIFF(first_in_range,last_before_range) as gap_days,orders_in_range,service_node FROM (SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,MIN(CASE WHEN o.created_on>='${start}' AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) THEN o.created_on END) as first_in_range,MAX(CASE WHEN o.created_on<'${start}' THEN o.created_on END) as last_before_range,COUNT(DISTINCT CASE WHEN o.created_on>='${start}' THEN o.id END) as orders_in_range,c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.created_on>=DATE_SUB('${start}',INTERVAL 180 DAY) AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) GROUP BY o.customerid,c.company,c.email,c.service_node) t WHERE first_in_range IS NOT NULL AND last_before_range IS NOT NULL AND DATEDIFF(first_in_range,last_before_range)>=15 ORDER BY gap_days DESC LIMIT 50`,
   };
 }
 
@@ -539,6 +542,141 @@ function ThemeSelector({ themeKey, setThemeKey, t }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── LivePickupList ─────────────────────────────────────────────────────────────
+const NODE_LABELS_GLOBAL = { JPRPC1:"Jaipur", DELPC1:"Delhi", SURPC1:"Surat", MUMPC1:"Mumbai", BLRPC1:"Bangalore" };
+
+function LivePickupList({ rows, loading, t }) {
+  const [search, setSearch] = useState("");
+  const filtered = search.trim()
+    ? rows.filter(r =>
+        r.scancode?.toLowerCase().includes(search.toLowerCase()) ||
+        r.customer_name?.toLowerCase().includes(search.toLowerCase()) ||
+        r.destination_country?.toLowerCase().includes(search.toLowerCase())
+      )
+    : rows;
+  return (
+    <Card title={`Live OUT_FOR_PICKUP  ·  ${rows.length} awaiting pickup`} accent="#ef4444" t={t} style={{ marginBottom:14 }}>
+      {loading
+        ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : <>
+            <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by scancode, customer or country…"
+                style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
+              {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13, padding:"0 4px" }}>✕</button>}
+              <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} shown</span>
+            </div>
+            <div style={{ maxHeight:320, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                <thead>
+                  <tr style={{ background:t.sk, position:"sticky", top:0 }}>
+                    {["Scancode","Customer","Country","Service","Carrier","Node","Created","Age"].map(h => (
+                      <th key={h} style={{ padding:"6px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length === 0
+                    ? <tr><td colSpan={8} style={{ padding:20, textAlign:"center", color:t.mu }}>No results</td></tr>
+                    : filtered.map((r,i) => {
+                        const age = parseInt(r.age_days) || 0;
+                        return (
+                          <tr key={i} className="rh">
+                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:"#3b82f6", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.scancode||"—"}</td>
+                            <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</td>
+                            <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.destination_country||"—"}</td>
+                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.shippingmethod||"—"}</td>
+                            <td style={{ padding:"6px 10px", color:t.mu, borderBottom:`1px solid ${t.border}`, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</td>
+                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.mu, borderBottom:`1px solid ${t.border}` }}>{NODE_LABELS_GLOBAL[r.service_node]||r.service_node||"—"}</td>
+                            <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.mu, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.created_date||"—"}</td>
+                            <td style={{ padding:"6px 10px", fontFamily:"monospace", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap",
+                              color: age >= 3 ? "#ef4444" : age >= 1 ? "#f59e0b" : "#10b981" }}>
+                              {age}d
+                            </td>
+                          </tr>
+                        );
+                      })
+                  }
+                </tbody>
+              </table>
+            </div>
+          </>
+      }
+    </Card>
+  );
+}
+
+// ── CustomerSignalCard ─────────────────────────────────────────────────────────
+function CustomerSignalCard({ newRows, reactivatedRows, loading, t }) {
+  const [tab,    setTab]    = useState("new");
+  const [search, setSearch] = useState("");
+  const rows     = tab === "new" ? (newRows||[]) : (reactivatedRows||[]);
+  const filtered = search.trim()
+    ? rows.filter(r => r.customer_name?.toLowerCase().includes(search.toLowerCase()))
+    : rows;
+  return (
+    <Card title="Customer Signals  ·  First-timers & Re-activated" accent="#f97316" t={t} style={{ marginBottom:14 }}>
+      {loading
+        ? <div style={{ height:220, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : <>
+            <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center", flexWrap:"wrap" }}>
+              <div style={{ display:"flex", background:t.sk, borderRadius:7, padding:2, gap:2 }}>
+                {[["new","★  First-time","#10b981"],["reactivated","↩  Re-activated","#f97316"]].map(([key,label,color]) => (
+                  <button key={key} onClick={() => { setTab(key); setSearch(""); }}
+                    style={{ padding:"5px 13px", borderRadius:5, border:"none", cursor:"pointer", fontSize:11, fontFamily:"monospace", fontWeight:600,
+                      background: tab===key ? color : "transparent",
+                      color: tab===key ? "#fff" : t.mu, transition:"all 0.15s" }}>
+                    {label}&nbsp;<span style={{ fontSize:10, opacity:0.8 }}>({key==="new"?(newRows||[]).length:(reactivatedRows||[]).length})</span>
+                  </button>
+                ))}
+              </div>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by name…"
+                style={{ flex:1, minWidth:140, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
+              {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13 }}>✕</button>}
+            </div>
+            <div style={{ fontSize:10, color:t.mu, marginBottom:10, fontStyle:"italic" }}>
+              {tab === "new"
+                ? "Customers whose very first order ever was placed within the selected date range."
+                : "Customers who re-ordered after 15+ days of inactivity — their previous order was outside the range."}
+            </div>
+            <div style={{ maxHeight:300, overflowY:"auto", display:"flex", flexDirection:"column", gap:5 }}>
+              {filtered.length === 0
+                ? <div style={{ color:t.mu, fontSize:12, padding:"20px 0", textAlign:"center" }}>No customers found</div>
+                : filtered.map((r,i) => (
+                    <div key={i} style={{ display:"flex", alignItems:"center", gap:10, background:t.sk, borderRadius:7, padding:"8px 12px" }}>
+                      <div style={{ width:30, height:30, borderRadius:"50%", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13,
+                        background: tab==="new" ? "#10b98118" : "#f9741618",
+                        color:      tab==="new" ? "#10b981"   : "#f97316" }}>
+                        {tab==="new" ? "★" : "↩"}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12, fontWeight:600, color:t.p, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</div>
+                        {tab === "new"
+                          ? <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>
+                              First order: <span style={{ color:"#10b981", fontFamily:"monospace" }}>{r.first_order_ever||"—"}</span>
+                              {r.total_orders > 0 && <span style={{ marginLeft:8 }}>{r.total_orders} orders total</span>}
+                            </div>
+                          : <div style={{ fontSize:10, color:t.mu, marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
+                              <span>Last seen: <span style={{ fontFamily:"monospace", color:t.s }}>{r.last_before_range||"—"}</span></span>
+                              <span style={{ background:"#f9741622", color:"#f97316", padding:"1px 6px", borderRadius:4, fontFamily:"monospace" }}>{r.gap_days}d gap</span>
+                              <span>{r.orders_in_range} order{r.orders_in_range>1?"s":""} now</span>
+                            </div>
+                        }
+                      </div>
+                      {r.service_node && (
+                        <span style={{ fontSize:10, color:t.mu, background:t.border, padding:"2px 7px", borderRadius:4, fontFamily:"monospace", flexShrink:0 }}>
+                          {NODE_LABELS_GLOBAL[r.service_node]||r.service_node}
+                        </span>
+                      )}
+                    </div>
+                  ))
+              }
+            </div>
+          </>
+      }
+    </Card>
   );
 }
 
@@ -1239,10 +1377,14 @@ export default function Dashboard() {
         })();
         const nodeMax = Math.max(...nodeGroups.map(g => g.total), 1);
 
-        const NODE_LABELS = { JPRPC1:"Jaipur", DELPC1:"Delhi", SURPC1:"Surat", MUMPC1:"Mumbai", BLRPC1:"Bangalore" };
-
         return (
           <>
+            {/* Live pickup list */}
+            <LivePickupList rows={data.livePickups||[]} loading={loading} t={t}/>
+
+            {/* Customer signals */}
+            <CustomerSignalCard newRows={data.newCustomers||[]} reactivatedRows={data.reactivatedCustomers||[]} loading={loading} t={t}/>
+
             {/* KPI row */}
             <div className="grid-kpi" style={{ marginBottom:14 }}>
               <KPICard label="Unique Customers"  loading={loading} value={fmt.number(uniqueCust)}  sub="Active shippers" color="#8b5cf6" t={t}/>
@@ -1457,7 +1599,7 @@ export default function Dashboard() {
                           return (
                             <div key={i}>
                               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                                <span style={{ fontSize:12, fontWeight:700, color:t.p }}>{NODE_LABELS[g.node] || g.node}</span>
+                                <span style={{ fontSize:12, fontWeight:700, color:t.p }}>{NODE_LABELS_GLOBAL[g.node] || g.node}</span>
                                 <span style={{ fontSize:11, color:"#10b981", fontFamily:"monospace", fontWeight:700 }}>{fmt.currency(g.total)}</span>
                               </div>
                               <div style={{ height:6, background:t.sk, borderRadius:3, marginBottom:5 }}>
