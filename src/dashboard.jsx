@@ -113,6 +113,7 @@ function makeQueries(start, end) {
     weekOnWeek:       `SELECT YEARWEEK(created_on,1) as week_num, DATE_FORMAT(MIN(created_on),'%d %b') as week_start, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, SUM(${REV}) as revenue FROM orders WHERE created_on>=DATE_SUB(CURDATE(),INTERVAL 13 WEEK) AND ${ACTF} GROUP BY YEARWEEK(created_on,1) ORDER BY week_num ASC`,
     kamRevenue:       `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')),'Unassigned') as kam, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')) ORDER BY revenue DESC LIMIT 20`,
     customerTiers:    `SELECT CASE WHEN decile=1 THEN 'Top 10%' WHEN decile<=5 THEN 'Middle 40%' ELSE 'Last 50%' END as tier, COUNT(*) as customers, SUM(revenue) as total_revenue, SUM(shipments) as total_shipments FROM (SELECT customerid, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders WHERE ${df} AND ${ACTF} GROUP BY customerid) t GROUP BY tier ORDER BY total_revenue DESC`,
+    customerTierDetail:`SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, SUM(${REV}) as revenue, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.company,c.email ORDER BY decile ASC, revenue DESC`,
     pickupNodePerf:   `SELECT c.service_node, COALESCE(fm.fm_partner,'No FM') as fm_carrier, COUNT(o.id) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id LEFT JOIN fm_manifest fm ON o.fm_manifest_scancode=fm.scancode WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND c.service_node IS NOT NULL AND c.service_node!='' GROUP BY c.service_node,fm.fm_partner ORDER BY revenue DESC LIMIT 30`,
     livePickups:      `SELECT o.scancode, o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 AND (c.service_node IS NULL OR c.service_node NOT LIKE 'PPN%') ORDER BY c.service_node ASC, o.created_on ASC LIMIT 200`,
     newCustomers:     `SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, DATE(MIN(o.created_on)) as first_order_ever, COUNT(o.id) as total_orders, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 GROUP BY o.customerid,c.company,c.email,c.service_node HAVING DATE(MIN(o.created_on))>='${start}' AND DATE(MIN(o.created_on))<='${end}' ORDER BY first_order_ever DESC LIMIT 50`,
@@ -984,6 +985,129 @@ function CustomerSignalCard({ newRows, reactivatedRows, loading, t }) {
   );
 }
 
+// ── CustomerTiersCard ─────────────────────────────────────────────────────────
+function CustomerTiersCard({ tierRows, detailRows, loading, t }) {
+  const [expanded, setExpanded] = useState(null); // "Top 10%" | "Middle 40%" | "Last 50%" | null
+  const [search,   setSearch]   = useState("");
+
+  const TIER_COLORS = { "Top 10%":"#f59e0b", "Middle 40%":"#3b82f6", "Last 50%":"#6b7280" };
+  const tierOrder   = ["Top 10%","Middle 40%","Last 50%"];
+
+  const tierOf = decile => {
+    const d = parseInt(decile);
+    if (d === 1)      return "Top 10%";
+    if (d <= 5)       return "Middle 40%";
+    return "Last 50%";
+  };
+
+  // Group detail rows by tier
+  const detailByTier = (detailRows||[]).reduce((map, r) => {
+    const tier = tierOf(r.decile);
+    if (!map[tier]) map[tier] = [];
+    map[tier].push(r);
+    return map;
+  }, {});
+
+  const tierTotalRev = (tierRows||[]).reduce((s,r) => s + (parseFloat(r.total_revenue)||0), 0);
+  const sorted       = tierOrder.map(name => (tierRows||[]).find(r=>r.tier===name)).filter(Boolean);
+
+  const toggle = tier => {
+    setExpanded(e => e === tier ? null : tier);
+    setSearch("");
+  };
+
+  return (
+    <Card title="Customer Revenue Tiers  ·  NTILE distribution  ·  Click a tier to see customers" accent="#f97316" t={t}>
+      {loading
+        ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : sorted.length === 0
+          ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
+          : <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {sorted.map((r,i) => {
+                const rev    = parseFloat(r.total_revenue)||0;
+                const pct    = tierTotalRev > 0 ? (rev/tierTotalRev*100) : 0;
+                const color  = TIER_COLORS[r.tier] || "#6b7280";
+                const isOpen = expanded === r.tier;
+                const custList = detailByTier[r.tier] || [];
+                const q = search.trim().toLowerCase();
+                const filtered = isOpen && q
+                  ? custList.filter(c => c.customer_name?.toLowerCase().includes(q))
+                  : custList;
+
+                return (
+                  <div key={i} style={{ border:`1px solid ${isOpen ? color+"66" : t.border}`, borderRadius:8, overflow:"hidden", transition:"border-color 0.2s" }}>
+                    {/* Tier row — clickable */}
+                    <button onClick={() => toggle(r.tier)}
+                      style={{ width:"100%", background: isOpen ? `${color}0e` : "transparent", border:"none", cursor:"pointer", padding:"10px 14px", textAlign:"left" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ fontSize:13, color:t.mu, transition:"transform 0.15s", display:"inline-block", transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                          <div style={{ width:10, height:10, borderRadius:3, background:color, flexShrink:0 }}/>
+                          <span style={{ fontSize:13, fontWeight:700, color }}>{r.tier}</span>
+                        </div>
+                        <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+                          <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.customers)} custs</span>
+                          <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.total_shipments)} ships</span>
+                          <span style={{ fontSize:13, fontWeight:700, color, fontFamily:"monospace" }}>{fmt.currency(rev)}</span>
+                        </div>
+                      </div>
+                      <div style={{ height:10, background:t.sk, borderRadius:6, overflow:"hidden" }}>
+                        <div style={{ width:`${pct}%`, height:"100%", background:`${color}cc`, borderRadius:6, display:"flex", alignItems:"center", paddingLeft:8 }}>
+                          {pct > 12 && <span style={{ fontSize:9, color:"#fff", fontFamily:"monospace", fontWeight:700 }}>{pct.toFixed(1)}%</span>}
+                        </div>
+                      </div>
+                      {pct <= 12 && <div style={{ fontSize:9, color:t.mu, fontFamily:"monospace", marginTop:2, textAlign:"right" }}>{pct.toFixed(1)}% of revenue</div>}
+                    </button>
+
+                    {/* Expanded customer list */}
+                    {isOpen && (
+                      <div style={{ borderTop:`1px solid ${color}44`, padding:"10px 14px" }}>
+                        <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center" }}>
+                          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by name…"
+                            style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"4px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
+                          {search && <button onClick={e => { e.stopPropagation(); setSearch(""); }} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13 }}>✕</button>}
+                          <span style={{ fontSize:10, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} of {custList.length}</span>
+                        </div>
+                        <div style={{ maxHeight:220, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
+                          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                            <thead><tr style={{ background:t.sk, position:"sticky", top:0 }}>
+                              <th style={{ padding:"5px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, width:28 }}>#</th>
+                              <th style={{ padding:"5px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}` }}>Customer</th>
+                              <th style={{ padding:"5px 10px", textAlign:"right", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>Shipments</th>
+                              <th style={{ padding:"5px 10px", textAlign:"right", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}` }}>Revenue</th>
+                            </tr></thead>
+                            <tbody>
+                              {filtered.length === 0
+                                ? <tr><td colSpan={4} style={{ padding:16, textAlign:"center", color:t.mu }}>No results</td></tr>
+                                : filtered.map((c, ci) => (
+                                    <tr key={ci} className="rh">
+                                      <td style={{ padding:"5px 10px", color:t.mu, fontFamily:"monospace", borderBottom:`1px solid ${t.border}`, fontSize:10 }}>{ci+1}</td>
+                                      <td style={{ padding:"5px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                        <CustLink id={c.customerid} name={c.customer_name}/>
+                                      </td>
+                                      <td style={{ padding:"5px 10px", textAlign:"right", color:t.mu, fontFamily:"monospace", borderBottom:`1px solid ${t.border}` }}>{fmt.number(c.shipments)}</td>
+                                      <td style={{ padding:"5px 10px", textAlign:"right", color, fontFamily:"monospace", fontWeight:700, borderBottom:`1px solid ${t.border}` }}>{fmt.currency(c.revenue)}</td>
+                                    </tr>
+                                  ))
+                              }
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ display:"flex", justifyContent:"space-between", paddingTop:4 }}>
+                <span style={{ fontSize:11, color:t.mu }}>{(tierRows||[]).reduce((s,r)=>s+(parseInt(r.customers)||0),0)} total customers</span>
+                <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(tierTotalRev)}</span>
+              </div>
+            </div>
+      }
+    </Card>
+  );
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [data,        setData]        = useState({});
@@ -1663,8 +1787,6 @@ export default function Dashboard() {
 
         // Customer tiers
         const tierRows = data.customerTiers || [];
-        const tierTotalRev = tierRows.reduce((s,r) => s + (parseFloat(r.total_revenue)||0), 0);
-        const TIER_COLORS = { "Top 10%":"#f59e0b", "Middle 40%":"#3b82f6", "Last 50%":"#6b7280" };
 
         // Pickup node
         const nodeRows = data.pickupNodePerf || [];
@@ -1851,51 +1973,7 @@ export default function Dashboard() {
 
             {/* Row: Customer Tiers + Pickup Node */}
             <div className="grid-2col">
-              <Card title="Customer Revenue Tiers  ·  NTILE distribution" accent="#f97316" t={t}>
-                {loading
-                  ? <div style={{ height:180, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
-                  : tierRows.length === 0
-                    ? <div style={{ color:t.mu, fontSize:12 }}>No data</div>
-                    : (() => {
-                        const tierOrder = ["Top 10%","Middle 40%","Last 50%"];
-                        const sorted = tierOrder.map(name => tierRows.find(r=>r.tier===name)).filter(Boolean);
-                        return (
-                          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-                            {sorted.map((r,i) => {
-                              const rev  = parseFloat(r.total_revenue)||0;
-                              const pct  = tierTotalRev > 0 ? (rev/tierTotalRev*100) : 0;
-                              const color= TIER_COLORS[r.tier] || "#6b7280";
-                              return (
-                                <div key={i}>
-                                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
-                                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                      <div style={{ width:10, height:10, borderRadius:3, background:color, flexShrink:0 }}/>
-                                      <span style={{ fontSize:13, fontWeight:700, color }}>{r.tier}</span>
-                                    </div>
-                                    <div style={{ display:"flex", gap:12, alignItems:"center" }}>
-                                      <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.customers)} custs</span>
-                                      <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace" }}>{fmt.number(r.total_shipments)} ships</span>
-                                      <span style={{ fontSize:13, fontWeight:700, color, fontFamily:"monospace" }}>{fmt.currency(rev)}</span>
-                                    </div>
-                                  </div>
-                                  <div style={{ height:12, background:t.sk, borderRadius:6, overflow:"hidden" }}>
-                                    <div style={{ width:`${pct}%`, height:"100%", background:`${color}cc`, borderRadius:6, display:"flex", alignItems:"center", paddingLeft:8 }}>
-                                      {pct > 10 && <span style={{ fontSize:9, color:"#ffffff", fontFamily:"monospace", fontWeight:700 }}>{pct.toFixed(1)}%</span>}
-                                    </div>
-                                  </div>
-                                  {pct <= 10 && <div style={{ fontSize:9, color:t.mu, fontFamily:"monospace", marginTop:2 }}>{pct.toFixed(1)}% of revenue</div>}
-                                </div>
-                              );
-                            })}
-                            <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:8, display:"flex", justifyContent:"space-between" }}>
-                              <span style={{ fontSize:11, color:t.mu }}>{tierRows.reduce((s,r)=>s+(parseInt(r.customers)||0),0)} total customers</span>
-                              <span style={{ fontSize:11, color:t.p, fontFamily:"monospace", fontWeight:600 }}>{fmt.currency(tierTotalRev)}</span>
-                            </div>
-                          </div>
-                        );
-                      })()
-                }
-              </Card>
+              <CustomerTiersCard tierRows={data.customerTiers||[]} detailRows={data.customerTierDetail||[]} loading={loading} t={t}/>
 
               <Card title="Pickup Node Performance  ·  by Service Node & FM Carrier" accent="#10b981" t={t}>
                 {loading
