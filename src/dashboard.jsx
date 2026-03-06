@@ -117,6 +117,9 @@ function makeQueries(start, end) {
     livePickups:      `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 AND (c.service_node IS NULL OR c.service_node NOT LIKE 'PPN%') ORDER BY c.service_node ASC, o.created_on ASC LIMIT 200`,
     newCustomers:     `SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, DATE(MIN(o.created_on)) as first_order_ever, COUNT(o.id) as total_orders, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 GROUP BY o.customerid,c.company,c.email,c.service_node HAVING DATE(MIN(o.created_on))>='${start}' AND DATE(MIN(o.created_on))<='${end}' ORDER BY first_order_ever DESC LIMIT 50`,
     reactivatedCustomers: `SELECT customerid,customer_name,DATE(first_in_range) as first_in_range,DATE(last_before_range) as last_before_range,DATEDIFF(first_in_range,last_before_range) as gap_days,orders_in_range,service_node FROM (SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,MIN(CASE WHEN o.created_on>='${start}' AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) THEN o.created_on END) as first_in_range,MAX(CASE WHEN o.created_on<'${start}' THEN o.created_on END) as last_before_range,COUNT(DISTINCT CASE WHEN o.created_on>='${start}' THEN o.id END) as orders_in_range,c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.created_on>=DATE_SUB('${start}',INTERVAL 180 DAY) AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) GROUP BY o.customerid,c.company,c.email,c.service_node) t WHERE first_in_range IS NOT NULL AND last_before_range IS NOT NULL AND DATEDIFF(first_in_range,last_before_range)>=15 ORDER BY gap_days DESC LIMIT 50`,
+    exceptionShipments:   `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(o.created_on) as created_date FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND (o.status LIKE '%HOLD%' OR o.status LIKE '%EXCEPTION%' OR o.status LIKE '%FAILED%' OR o.status LIKE '%RETURN%' OR o.status LIKE '%REJECT%' OR o.status LIKE '%DAMAGE%') ORDER BY o.status, o.created_on DESC LIMIT 300`,
+    staleShipments:       `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(MAX(ot.created_on)) as last_update, DATEDIFF(NOW(),MAX(ot.created_on)) as days_stale FROM orders o INNER JOIN ordertracking ot ON ot.orderid=o.id LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.status NOT LIKE '%DELIVERED%' AND o.status NOT LIKE '%CANCELLED%' AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') GROUP BY o.id,o.scancode,c.company,c.email,o.customerid,o.destination_country,o.shippingmethod,o.lmcarrier,o.status HAVING DATEDIFF(NOW(),MAX(ot.created_on))>=3 ORDER BY days_stale DESC LIMIT 200`,
+    staleBoxes:           `SELECT o.scancode, oli.id as box_id, DATE(MAX(olit.created_on)) as last_update, DATEDIFF(NOW(),MAX(olit.created_on)) as days_stale, MAX(olit.status) as box_status FROM orderlineitems oli INNER JOIN orderlineitemtracking olit ON olit.orderlineitemid=oli.id INNER JOIN orders o ON oli.orderid=o.id WHERE ${odf} AND o.iscancelled=0 AND o.status NOT LIKE '%DELIVERED%' AND o.status NOT LIKE '%CANCELLED%' GROUP BY oli.id,o.scancode HAVING DATEDIFF(NOW(),MAX(olit.created_on))>=3 ORDER BY days_stale DESC LIMIT 200`,
   };
 }
 
@@ -542,6 +545,169 @@ function ThemeSelector({ themeKey, setThemeKey, t }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Shared alert table helpers ────────────────────────────────────────────────
+const AlertTH = ({ children, t }) => (
+  <th style={{ padding:"6px 10px", textAlign:"left", color:t.mu, fontFamily:"monospace", fontWeight:600, borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{children}</th>
+);
+const AlertTD = ({ children, style, t }) => (
+  <td style={{ padding:"6px 10px", borderBottom:`1px solid ${t.border}`, ...(style||{}) }}>{children}</td>
+);
+const exStatusColor = s => {
+  if (!s) return "#6b7280";
+  const sl = s.toLowerCase();
+  if (sl.includes("hold"))   return "#f59e0b";
+  if (sl.includes("return")) return "#8b5cf6";
+  return "#ef4444";
+};
+const staleColor = d => parseInt(d) >= 7 ? "#ef4444" : parseInt(d) >= 5 ? "#f97316" : "#f59e0b";
+
+// ── ExceptionShipmentsCard ────────────────────────────────────────────────────
+function ExceptionShipmentsCard({ rows, loading, t }) {
+  const [selectedStatus, setSelectedStatus] = useState(null);
+  const [search,         setSearch]         = useState("");
+
+  const statusGroups = (() => {
+    const map = {};
+    (rows||[]).forEach(r => { const s = r.status||"Unknown"; if (!map[s]) map[s]=[]; map[s].push(r); });
+    return Object.entries(map).sort((a,b) => b[1].length - a[1].length);
+  })();
+
+  const q        = search.trim().toLowerCase();
+  const matchRow = r => !q || r.scancode?.toLowerCase().includes(q) || r.customer_name?.toLowerCase().includes(q);
+  const filtered = (selectedStatus ? (rows||[]).filter(r=>r.status===selectedStatus) : (rows||[])).filter(matchRow);
+
+  return (
+    <Card title={`Exception Shipments  ·  ${(rows||[]).length} total`} accent="#f59e0b" t={t}>
+      {loading
+        ? <div style={{ height:260, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : <>
+            {/* Status pills */}
+            <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:10 }}>
+              <button onClick={() => setSelectedStatus(null)}
+                style={{ padding:"3px 10px", borderRadius:20, border:`1px solid ${t.border}`, fontSize:10, fontFamily:"monospace", cursor:"pointer",
+                  background: selectedStatus===null ? "#f59e0b" : t.sk, color: selectedStatus===null ? "#fff" : t.mu }}>
+                All · {(rows||[]).length}
+              </button>
+              {statusGroups.map(([status, srows]) => {
+                const color  = exStatusColor(status);
+                const active = selectedStatus === status;
+                return (
+                  <button key={status} onClick={() => setSelectedStatus(s => s===status ? null : status)}
+                    style={{ padding:"3px 10px", borderRadius:20, border:`1px solid ${color}55`, fontSize:10, fontFamily:"monospace", cursor:"pointer",
+                      background: active ? color : `${color}18`, color: active ? "#fff" : color }}>
+                    {status.replace(/_/g," ")} · {srows.length}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Search */}
+            <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by scancode or customer…"
+                style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
+              {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13 }}>✕</button>}
+              <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} shown</span>
+            </div>
+            {/* Table */}
+            <div style={{ maxHeight:280, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                <thead><tr style={{ background:t.sk, position:"sticky", top:0 }}>
+                  {["Scancode","Customer","Country","Svc","Status","Created"].map(h => <AlertTH key={h} t={t}>{h}</AlertTH>)}
+                </tr></thead>
+                <tbody>
+                  {filtered.length === 0
+                    ? <tr><td colSpan={6} style={{ padding:20, textAlign:"center", color:t.mu }}>No results</td></tr>
+                    : filtered.map((r,i) => {
+                        const color = exStatusColor(r.status);
+                        return (
+                          <tr key={i} className="rh">
+                            <AlertTD t={t} style={{ fontFamily:"monospace", color:"#3b82f6", whiteSpace:"nowrap" }}>{r.scancode||"—"}</AlertTD>
+                            <AlertTD t={t} style={{ color:t.s, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
+                            <AlertTD t={t} style={{ color:t.s }}>{r.destination_country||"—"}</AlertTD>
+                            <AlertTD t={t} style={{ fontFamily:"monospace", color:t.s }}>{r.shippingmethod||"—"}</AlertTD>
+                            <AlertTD t={t}>
+                              <span style={{ fontSize:10, color, background:`${color}18`, padding:"2px 6px", borderRadius:4, fontFamily:"monospace", whiteSpace:"nowrap" }}>
+                                {(r.status||"—").replace(/_/g," ")}
+                              </span>
+                            </AlertTD>
+                            <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, whiteSpace:"nowrap" }}>{r.created_date||"—"}</AlertTD>
+                          </tr>
+                        );
+                      })
+                  }
+                </tbody>
+              </table>
+            </div>
+          </>
+      }
+    </Card>
+  );
+}
+
+// ── StaleShipmentsCard ────────────────────────────────────────────────────────
+function StaleShipmentsCard({ rows, boxRows, loading, t }) {
+  const [search, setSearch] = useState("");
+
+  const q        = search.trim().toLowerCase();
+  const filtered = (rows||[]).filter(r => !q || r.scancode?.toLowerCase().includes(q) || r.customer_name?.toLowerCase().includes(q));
+  const total    = (rows||[]).length;
+  const avgDays  = total > 0 ? Math.round((rows||[]).reduce((s,r)=>s+(parseInt(r.days_stale)||0),0)/total) : 0;
+
+  return (
+    <Card title={`No Update >3 Days  ·  ${total} shipments`} accent="#ef4444" t={t}>
+      {loading
+        ? <div style={{ height:260, background:t.sk, borderRadius:8, animation:"pulse 1.5s infinite" }}/>
+        : <>
+            {/* Summary stats */}
+            <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap" }}>
+              <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:20, fontWeight:700, color:"#ef4444", fontFamily:"monospace" }}>{total}</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Stale orders</div>
+              </div>
+              {avgDays > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:20, fontWeight:700, color:staleColor(avgDays), fontFamily:"monospace" }}>{avgDays}d</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Avg stale</div>
+              </div>}
+              {(boxRows||[]).length > 0 && <div style={{ background:t.sk, borderRadius:8, padding:"8px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:20, fontWeight:700, color:"#f97316", fontFamily:"monospace" }}>{(boxRows||[]).length}</div>
+                <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>Stale boxes</div>
+              </div>}
+            </div>
+            {/* Search */}
+            <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by scancode or customer…"
+                style={{ flex:1, background:t.sk, border:`1px solid ${t.border}`, borderRadius:6, padding:"5px 10px", fontSize:11, color:t.s, fontFamily:"monospace", outline:"none" }}/>
+              {search && <button onClick={() => setSearch("")} style={{ background:"none", border:"none", color:t.mu, cursor:"pointer", fontSize:13 }}>✕</button>}
+              <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", flexShrink:0 }}>{filtered.length} shown</span>
+            </div>
+            {/* Table */}
+            <div style={{ maxHeight:260, overflowY:"auto", borderRadius:6, border:`1px solid ${t.border}` }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                <thead><tr style={{ background:t.sk, position:"sticky", top:0 }}>
+                  {["Scancode","Customer","Country","Current Status","Last Update","Stale"].map(h => <AlertTH key={h} t={t}>{h}</AlertTH>)}
+                </tr></thead>
+                <tbody>
+                  {filtered.length === 0
+                    ? <tr><td colSpan={6} style={{ padding:20, textAlign:"center", color:t.mu }}>No stale shipments</td></tr>
+                    : filtered.map((r,i) => (
+                        <tr key={i} className="rh">
+                          <AlertTD t={t} style={{ fontFamily:"monospace", color:"#3b82f6", whiteSpace:"nowrap" }}>{r.scancode||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ color:t.s, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ color:t.s }}>{r.destination_country||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, fontSize:10 }}>{(r.status||"—").replace(/_/g," ")}</AlertTD>
+                          <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, whiteSpace:"nowrap" }}>{r.last_update||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap", color:staleColor(r.days_stale) }}>{r.days_stale}d</AlertTD>
+                        </tr>
+                      ))
+                  }
+                </tbody>
+              </table>
+            </div>
+          </>
+      }
+    </Card>
   );
 }
 
@@ -1423,6 +1589,12 @@ export default function Dashboard() {
           <>
             {/* Live pickup list */}
             <LivePickupList rows={data.livePickups||[]} loading={loading} t={t}/>
+
+            {/* Shipment alerts: two separate cards side by side */}
+            <div className="grid-2col">
+              <ExceptionShipmentsCard rows={data.exceptionShipments||[]} loading={loading} t={t}/>
+              <StaleShipmentsCard rows={data.staleShipments||[]} boxRows={data.staleBoxes||[]} loading={loading} t={t}/>
+            </div>
 
             {/* Customer signals */}
             <CustomerSignalCard newRows={data.newCustomers||[]} reactivatedRows={data.reactivatedCustomers||[]} loading={loading} t={t}/>
