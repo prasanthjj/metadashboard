@@ -93,11 +93,11 @@ function makeQueries(start, end) {
     ordersByStatus:    `SELECT status,COUNT(*) as count FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} GROUP BY status ORDER BY count DESC LIMIT 10`,
     dailyRevenue:      `SELECT DATE(created_on) as day,COUNT(CASE WHEN iscancelled=0 THEN id END) as orders,SUM(${REV}) as revenue,SUM(${WEIGHT}) as daily_load FROM orders WHERE ${df} AND ${ACTF} GROUP BY DATE(created_on) ORDER BY day ASC`,
     topCountries:      `SELECT destination_country,SUM(${REV}) as revenue,COUNT(CASE WHEN iscancelled=0 THEN id END) as count FROM orders WHERE ${df} AND ${ACTF} GROUP BY destination_country ORDER BY revenue DESC LIMIT 12`,
-    topCustomers:      `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
+    topCustomers:      `SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as orders,SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
     trackingStatus:    `SELECT ot.status,COUNT(*) as count FROM ordertracking ot INNER JOIN orders o ON ot.orderid=o.id WHERE ${odf} GROUP BY ot.status ORDER BY count DESC`,
     shipmentsByService:`SELECT shippingmethod as service,COUNT(CASE WHEN iscancelled=0 THEN id END) as count,SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND shippingmethod IS NOT NULL AND shippingmethod!='' GROUP BY shippingmethod ORDER BY revenue DESC`,
     carrierPerformance:`SELECT lmcarrier,lmshippingmethod,COUNT(*) as total,SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END) as delivered,ROUND(SUM(CASE WHEN status='SHIPMENT_DELIVERED' THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0),1) as delivery_rate,ROUND(AVG(CASE WHEN delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL THEN DATEDIFF(delivereddate,readyforpickupdate) END),1) as avg_tat FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND lmcarrier IS NOT NULL AND lmcarrier!='' GROUP BY lmcarrier,lmshippingmethod ORDER BY total DESC LIMIT 15`,
-    commercialCustomers:`SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(o.id) as order_count, SUM(CASE WHEN o.final_charge_updated=0 THEN o.advanceamount ELSE o.totalamount END) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.lmcarrier NOT LIKE '%indiapost%' AND o.paymentstatus='completed' AND o.shippingmethod NOT IN ('AN','IP','IE') GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 15`,
+    commercialCustomers:`SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(o.id) as order_count, SUM(CASE WHEN o.final_charge_updated=0 THEN o.advanceamount ELSE o.totalamount END) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.lmcarrier NOT LIKE '%indiapost%' AND o.paymentstatus='completed' AND o.shippingmethod NOT IN ('AN','IP','IE') GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 15`,
     tatDistribution:   `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE ${df} AND iscancelled=0 AND ${ACTF} AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
     ipKpis:            `SELECT COUNT(*) as total, SUM(CASE WHEN iscancelled=0 THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status='SHIPMENT_DELIVERED' AND iscancelled=0 THEN 1 ELSE 0 END) as delivered, SUM(CASE WHEN iscancelled=1 THEN 1 ELSE 0 END) as cancelled, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df}`,
     ipStatusFlow:      `SELECT status, COUNT(*) as count FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY status ORDER BY count DESC LIMIT 15`,
@@ -106,7 +106,7 @@ function makeQueries(start, end) {
     ipPendingCustoms:  `SELECT COUNT(*) as count FROM indiapost_shipments i INNER JOIN orders o ON i.shipment_id=o.id WHERE i.customs_query_response IS NOT NULL AND JSON_LENGTH(i.customs_query_response)>0 AND (i.query_submission_response IS NULL OR JSON_LENGTH(i.query_submission_response)=0) AND o.iscancelled=0`,
     ipOnHold:          `SELECT o.scancode, o.destination_country, DATE(o.created_on) as created, o.status FROM orders o WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND o.iscancelled=0 AND o.status IN ('SHIPMENT_ON_HOLD_AT_ORIGIN_CUSTOMS','SHIPMENT_ON_HOLD_AT_DESTINATION_CUSTOMS') ORDER BY o.created_on DESC LIMIT 100`,
     ipCountries:       `SELECT destination_country, COUNT(*) as count, SUM(${REV}) as revenue FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 GROUP BY destination_country ORDER BY count DESC LIMIT 15`,
-    ipCustomers:       `SELECT COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
+    ipCustomers:       `SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, COUNT(*) as count, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE (o.scancode LIKE 'LP%' OR o.scancode LIKE 'EY%') AND ${odf} AND o.iscancelled=0 GROUP BY o.customerid,c.company,c.email ORDER BY revenue DESC LIMIT 10`,
     ipTatDistribution: `SELECT CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN '1–7d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN '8–14d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN '15–21d' WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN '22–28d' ELSE '29+d' END as bucket, CASE WHEN DATEDIFF(delivereddate,readyforpickupdate)<=7 THEN 1 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=14 THEN 2 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=21 THEN 3 WHEN DATEDIFF(delivereddate,readyforpickupdate)<=28 THEN 4 ELSE 5 END as sort_order, COUNT(*) as shipments FROM orders WHERE (scancode LIKE 'LP%' OR scancode LIKE 'EY%') AND ${df} AND iscancelled=0 AND status='SHIPMENT_DELIVERED' AND delivereddate IS NOT NULL AND readyforpickupdate IS NOT NULL GROUP BY bucket,sort_order ORDER BY sort_order`,
     networkRevenue:   `SELECT pointofentry as network, shippingmethod as service, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, SUM(${REV}) as revenue FROM orders WHERE ${df} AND ${ACTF} AND iscancelled=0 AND pointofentry IS NOT NULL AND pointofentry!='' GROUP BY pointofentry,shippingmethod ORDER BY SUM(${REV}) DESC LIMIT 60`,
     clearanceRevenue: `SELECT TRIM(destination_clearance) as clearance, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments FROM orders WHERE ${df} AND ${ACTF} AND destination_clearance IS NOT NULL AND destination_clearance!='' GROUP BY TRIM(destination_clearance) ORDER BY revenue DESC`,
@@ -114,11 +114,11 @@ function makeQueries(start, end) {
     kamRevenue:       `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')),'Unassigned') as kam, COUNT(CASE WHEN o.iscancelled=0 THEN o.id END) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.${ACTF} GROUP BY JSON_UNQUOTE(JSON_EXTRACT(c.kam_info,'$.name')) ORDER BY revenue DESC LIMIT 20`,
     customerTiers:    `SELECT CASE WHEN decile=1 THEN 'Top 10%' WHEN decile<=5 THEN 'Middle 40%' ELSE 'Last 50%' END as tier, COUNT(*) as customers, SUM(revenue) as total_revenue, SUM(shipments) as total_shipments FROM (SELECT customerid, SUM(${REV}) as revenue, COUNT(CASE WHEN iscancelled=0 THEN id END) as shipments, NTILE(10) OVER (ORDER BY SUM(${REV}) DESC) as decile FROM orders WHERE ${df} AND ${ACTF} GROUP BY customerid) t GROUP BY tier ORDER BY total_revenue DESC`,
     pickupNodePerf:   `SELECT c.service_node, COALESCE(fm.fm_partner,'No FM') as fm_carrier, COUNT(o.id) as shipments, SUM(${REV}) as revenue FROM orders o LEFT JOIN customers c ON o.customerid=c.id LEFT JOIN fm_manifest fm ON o.fm_manifest_scancode=fm.scancode WHERE ${odf} AND o.iscancelled=0 AND o.${ACTF} AND c.service_node IS NOT NULL AND c.service_node!='' GROUP BY c.service_node,fm.fm_partner ORDER BY revenue DESC LIMIT 30`,
-    livePickups:      `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 AND (c.service_node IS NULL OR c.service_node NOT LIKE 'PPN%') ORDER BY c.service_node ASC, o.created_on ASC LIMIT 200`,
+    livePickups:      `SELECT o.scancode, o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, DATE(o.created_on) as created_date, DATEDIFF(NOW(),o.created_on) as age_days, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.all_status='OUT_FOR_PICKUP' AND o.iscancelled=0 AND (c.service_node IS NULL OR c.service_node NOT LIKE 'PPN%') ORDER BY c.service_node ASC, o.created_on ASC LIMIT 200`,
     newCustomers:     `SELECT o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, DATE(MIN(o.created_on)) as first_order_ever, COUNT(o.id) as total_orders, c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 GROUP BY o.customerid,c.company,c.email,c.service_node HAVING DATE(MIN(o.created_on))>='${start}' AND DATE(MIN(o.created_on))<='${end}' ORDER BY first_order_ever DESC LIMIT 50`,
     reactivatedCustomers: `SELECT customerid,customer_name,DATE(first_in_range) as first_in_range,DATE(last_before_range) as last_before_range,DATEDIFF(first_in_range,last_before_range) as gap_days,orders_in_range,service_node FROM (SELECT o.customerid,COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name,MIN(CASE WHEN o.created_on>='${start}' AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) THEN o.created_on END) as first_in_range,MAX(CASE WHEN o.created_on<'${start}' THEN o.created_on END) as last_before_range,COUNT(DISTINCT CASE WHEN o.created_on>='${start}' THEN o.id END) as orders_in_range,c.service_node FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND o.created_on>=DATE_SUB('${start}',INTERVAL 180 DAY) AND o.created_on<DATE_ADD('${end}',INTERVAL 1 DAY) GROUP BY o.customerid,c.company,c.email,c.service_node) t WHERE first_in_range IS NOT NULL AND last_before_range IS NOT NULL AND DATEDIFF(first_in_range,last_before_range)>=15 ORDER BY gap_days DESC LIMIT 50`,
-    exceptionShipments:   `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(o.created_on) as created_date FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND (o.status LIKE '%HOLD%' OR o.status LIKE '%EXCEPTION%' OR o.status LIKE '%FAILED%' OR o.status LIKE '%RETURN%' OR o.status LIKE '%REJECT%' OR o.status LIKE '%DAMAGE%') ORDER BY o.status, o.created_on DESC LIMIT 300`,
-    staleShipments:       `SELECT o.scancode, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(MAX(ot.created_on)) as last_update, DATEDIFF(NOW(),MAX(ot.created_on)) as days_stale FROM orders o INNER JOIN ordertracking ot ON ot.orderid=o.id LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.status NOT LIKE '%DELIVERED%' AND o.status NOT LIKE '%CANCELLED%' AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') GROUP BY o.id,o.scancode,c.company,c.email,o.customerid,o.destination_country,o.shippingmethod,o.lmcarrier,o.status HAVING DATEDIFF(NOW(),MAX(ot.created_on))>=3 ORDER BY days_stale DESC LIMIT 200`,
+    exceptionShipments:   `SELECT o.scancode, o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(o.created_on) as created_date FROM orders o LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') AND (o.status LIKE '%HOLD%' OR o.status LIKE '%EXCEPTION%' OR o.status LIKE '%FAILED%' OR o.status LIKE '%RETURN%' OR o.status LIKE '%REJECT%' OR o.status LIKE '%DAMAGE%') ORDER BY o.status, o.created_on DESC LIMIT 300`,
+    staleShipments:       `SELECT o.scancode, o.customerid, COALESCE(c.company,c.email,CONCAT('Customer #',o.customerid)) as customer_name, o.destination_country, o.shippingmethod, o.lmcarrier, o.status, DATE(MAX(ot.created_on)) as last_update, DATEDIFF(NOW(),MAX(ot.created_on)) as days_stale FROM orders o INNER JOIN ordertracking ot ON ot.orderid=o.id LEFT JOIN customers c ON o.customerid=c.id WHERE ${odf} AND o.iscancelled=0 AND o.status NOT LIKE '%DELIVERED%' AND o.status NOT LIKE '%CANCELLED%' AND o.all_status NOT IN ('SHIPMENT_CREATED','SHIPMENT_UNDER_CREATION') GROUP BY o.id,o.scancode,c.company,c.email,o.customerid,o.destination_country,o.shippingmethod,o.lmcarrier,o.status HAVING DATEDIFF(NOW(),MAX(ot.created_on))>=3 ORDER BY days_stale DESC LIMIT 200`,
     staleBoxes:           `SELECT o.scancode, oli.id as box_id, DATE(MAX(olit.created_on)) as last_update, DATEDIFF(NOW(),MAX(olit.created_on)) as days_stale, MAX(olit.status) as box_status FROM orderlineitems oli INNER JOIN orderlineitemtracking olit ON olit.orderlineitemid=oli.id INNER JOIN orders o ON oli.orderid=o.id WHERE ${odf} AND o.iscancelled=0 AND o.status NOT LIKE '%DELIVERED%' AND o.status NOT LIKE '%CANCELLED%' GROUP BY oli.id,o.scancode HAVING DATEDIFF(NOW(),MAX(olit.created_on))>=3 ORDER BY days_stale DESC LIMIT 200`,
   };
 }
@@ -140,6 +140,20 @@ const fmt = {
   date:     d => !d ? "—" : new Date(d).toLocaleDateString("en-IN",{day:"2-digit",month:"short"}),
   countdown:s => `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.floor((s%3600)/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`,
 };
+
+const ShipLink = ({ scancode, style }) => !scancode ? <span>—</span> : (
+  <a href={`https://one.xindus.net/erp/ops-shipment-edit.html?awb=${scancode}`} target="_blank" rel="noopener noreferrer"
+    style={{ color:"#3b82f6", fontFamily:"monospace", textDecoration:"none", fontWeight:600, ...style }}>
+    {scancode} <span style={{ fontSize:9, opacity:0.7 }}>↗</span>
+  </a>
+);
+
+const CustLink = ({ id, name, style }) => !id || !name ? <span style={style}>{name||"—"}</span> : (
+  <a href={`https://one.xindus.net/erp/ops-customer-edit.html?userId=${id}`} target="_blank" rel="noopener noreferrer"
+    style={{ color:"inherit", textDecoration:"none", borderBottom:"1px dotted currentColor", ...style }}>
+    {name}
+  </a>
+);
 
 const statusColor = s => {
   if (!s) return "#6b7280";
@@ -623,8 +637,8 @@ function ExceptionShipmentsCard({ rows, loading, t }) {
                         const color = exStatusColor(r.status);
                         return (
                           <tr key={i} className="rh">
-                            <AlertTD t={t} style={{ fontFamily:"monospace", color:"#3b82f6", whiteSpace:"nowrap" }}>{r.scancode||"—"}</AlertTD>
-                            <AlertTD t={t} style={{ color:t.s, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
+                            <AlertTD t={t} style={{ whiteSpace:"nowrap" }}><ShipLink scancode={r.scancode}/></AlertTD>
+                            <AlertTD t={t} style={{ color:t.s, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></AlertTD>
                             <AlertTD t={t} style={{ color:t.s }}>{r.destination_country||"—"}</AlertTD>
                             <AlertTD t={t} style={{ fontFamily:"monospace", color:t.s }}>{r.shippingmethod||"—"}</AlertTD>
                             <AlertTD t={t}>
@@ -774,8 +788,8 @@ function StaleShipmentsCard({ rows, boxRows, loading, t }) {
                     ? <tr><td colSpan={7} style={{ padding:20, textAlign:"center", color:t.mu }}>No matching shipments</td></tr>
                     : filtered.map((r,i) => (
                         <tr key={i} className="rh">
-                          <AlertTD t={t} style={{ fontFamily:"monospace", color:"#3b82f6", whiteSpace:"nowrap" }}>{r.scancode||"—"}</AlertTD>
-                          <AlertTD t={t} style={{ color:t.s, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</AlertTD>
+                          <AlertTD t={t} style={{ whiteSpace:"nowrap" }}><ShipLink scancode={r.scancode}/></AlertTD>
+                          <AlertTD t={t} style={{ color:t.s, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></AlertTD>
                           <AlertTD t={t} style={{ color:t.s }}>{r.destination_country||"—"}</AlertTD>
                           <AlertTD t={t} style={{ fontFamily:"monospace", color:t.mu, fontSize:10, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{(r.status||"—").replace(/_/g," ")}</AlertTD>
                           <AlertTD t={t} style={{ color:t.mu, fontSize:10, maxWidth:110, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</AlertTD>
@@ -868,8 +882,8 @@ function LivePickupList({ rows, loading, t }) {
                               const age = parseInt(r.age_days) || 0;
                               return (
                                 <tr key={i} className="rh">
-                                  <td style={{ padding:"6px 10px", fontFamily:"monospace", color:"#3b82f6", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}>{r.scancode||"—"}</td>
-                                  <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</td>
+                                  <td style={{ padding:"6px 10px", borderBottom:`1px solid ${t.border}`, whiteSpace:"nowrap" }}><ShipLink scancode={r.scancode}/></td>
+                                  <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}`, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></td>
                                   <td style={{ padding:"6px 10px", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.destination_country||"—"}</td>
                                   <td style={{ padding:"6px 10px", fontFamily:"monospace", color:t.s, borderBottom:`1px solid ${t.border}` }}>{r.shippingmethod||"—"}</td>
                                   <td style={{ padding:"6px 10px", color:t.mu, borderBottom:`1px solid ${t.border}`, maxWidth:130, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.lmcarrier||"—"}</td>
@@ -942,7 +956,7 @@ function CustomerSignalCard({ newRows, reactivatedRows, loading, t }) {
                         {tab==="new" ? "★" : "↩"}
                       </div>
                       <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ fontSize:12, fontWeight:600, color:t.p, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</div>
+                        <div style={{ fontSize:12, fontWeight:600, color:t.p, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></div>
                         {tab === "new"
                           ? <div style={{ fontSize:10, color:t.mu, marginTop:2 }}>
                               First order: <span style={{ color:"#10b981", fontFamily:"monospace" }}>{r.first_order_ever||"—"}</span>
@@ -1365,7 +1379,7 @@ export default function Dashboard() {
                       <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", width:16, flexShrink:0, textAlign:"right" }}>{i+1}</span>
                       <div style={{ flex:1, minWidth:0 }}>
                         <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
-                          <span style={{ fontSize:12, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, marginRight:8 }}>{c.customer_name||"—"}</span>
+                          <span style={{ fontSize:12, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, marginRight:8 }}><CustLink id={c.customerid} name={c.customer_name}/></span>
                           <span style={{ fontSize:11, color:"#f59e0b", fontFamily:"monospace", flexShrink:0 }}>{fmt.currency(c.revenue)}</span>
                         </div>
                         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
@@ -1400,7 +1414,7 @@ export default function Dashboard() {
                       return (
                         <div key={i} style={{ display:"grid", gridTemplateColumns:"22px 1fr 160px 80px 76px", gap:"0 10px", alignItems:"center" }}>
                           <span style={{ fontSize:11, color:t.mu, fontFamily:"monospace", textAlign:"right" }}>{i+1}</span>
-                          <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</span>
+                          <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></span>
                           <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                             <div style={{ flex:1, height:5, background:t.sk, borderRadius:3 }}>
                               <div style={{ width:`${barW}%`, height:"100%", background:"#06b6d499", borderRadius:3 }}/>
@@ -1543,7 +1557,7 @@ export default function Dashboard() {
                         </div>
                         {rows.slice(0,10).map((r,i) => (
                           <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 120px 130px", gap:"0 12px", alignItems:"center" }}>
-                            <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer_name||"—"}</span>
+                            <span style={{ fontSize:11, color:t.s, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><CustLink id={r.customerid} name={r.customer_name}/></span>
                             <div style={{ display:"flex", alignItems:"center", gap:5, justifyContent:"flex-end" }}>
                               <div style={{ width:50, height:4, background:t.sk, borderRadius:2, flexShrink:0 }}>
                                 <div style={{ width:`${(parseFloat(r.count)||0)/maxCount*100}%`, height:"100%", background:"#f59e0b99", borderRadius:2 }}/>
